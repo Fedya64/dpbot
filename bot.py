@@ -24,10 +24,8 @@ CITIES = {
     "Варшава": "https://warsaw.pasport.org.ua/solutions/e-queue",
 }
 
-# Збереження міста для кожного користувача
 user_city = {}
-
-CHECK_INTERVAL = 30  # секунд
+CHECK_INTERVAL = 30
 
 
 async def check_slots(context: ContextTypes.DEFAULT_TYPE):
@@ -123,7 +121,7 @@ def main_menu():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
-async def main():
+def main():
     TOKEN = os.getenv("TOKEN")
 
     application = ApplicationBuilder().token(TOKEN).build()
@@ -136,9 +134,8 @@ async def main():
 
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, city_choice))
 
-    await application.run_polling()
+    application.run_polling()
 
 
 if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+    main()
