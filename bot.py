@@ -5,8 +5,8 @@ import requests
 from bs4 import BeautifulSoup
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
-    Updater, CommandHandler, CallbackContext,
-    MessageHandler, Filters
+    ApplicationBuilder, CommandHandler,
+    MessageHandler, ContextTypes, filters
 )
 
 # === ЛОГУВАННЯ ===
@@ -30,8 +30,8 @@ user_city = {}
 CHECK_INTERVAL = 30  # секунд
 
 
-def check_slots(context: CallbackContext):
-    chat_id = context.job.context
+async def check_slots(context: ContextTypes.DEFAULT_TYPE):
+    chat_id = context.job.chat_id
     city = user_city.get(chat_id, "Мюнхен")
     url = CITIES[city]
 
@@ -42,7 +42,7 @@ def check_slots(context: CallbackContext):
 
         if "Наразі всі місця зайняті" not in soup.text:
             msg = f"🟢 Є вільні слоти у місті {city}!\nПерейти до запису:\n{url}"
-            context.bot.send_message(chat_id=chat_id, text=msg)
+            await context.bot.send_message(chat_id=chat_id, text=msg)
             logging.info(f"Слоти знайдено для {city}")
         else:
             logging.info(f"Немає слотів для {city}")
@@ -51,56 +51,61 @@ def check_slots(context: CallbackContext):
         logging.error(f"Помилка: {e}")
 
 
-def start(update: Update, context: CallbackContext):
-    chat_id = update.message.chat_id
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
     user_city.setdefault(chat_id, "Мюнхен")
 
-    update.message.reply_text(
+    await update.message.reply_text(
         f"Моніторинг запущено.\nМісто: {user_city[chat_id]}",
         reply_markup=main_menu()
     )
 
-    context.job_queue.run_repeating(check_slots, CHECK_INTERVAL, context=chat_id)
+    context.job_queue.run_repeating(
+        check_slots,
+        interval=CHECK_INTERVAL,
+        first=5,
+        chat_id=chat_id
+    )
 
 
-def stop(update: Update, context: CallbackContext):
+async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.job_queue.stop()
-    update.message.reply_text("Моніторинг зупинено.", reply_markup=main_menu())
+    await update.message.reply_text("Моніторинг зупинено.", reply_markup=main_menu())
 
 
-def status(update: Update, context: CallbackContext):
-    city = user_city.get(update.message.chat_id, "Мюнхен")
-    update.message.reply_text(
+async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    city = user_city.get(update.effective_chat.id, "Мюнхен")
+    await update.message.reply_text(
         f"Моніторинг активний.\nМісто: {city}",
         reply_markup=main_menu()
     )
 
 
-def city(update: Update, context: CallbackContext):
+async def city(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[city] for city in CITIES.keys()]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    update.message.reply_text("Оберіть місто:", reply_markup=reply_markup)
+    await update.message.reply_text("Оберіть місто:", reply_markup=reply_markup)
 
 
-def city_choice(update: Update, context: CallbackContext):
-    chat_id = update.message.chat_id
+async def city_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
     choice = update.message.text
 
     if choice in CITIES:
         user_city[chat_id] = choice
-        update.message.reply_text(
+        await update.message.reply_text(
             f"Місто змінено на: {choice}",
             reply_markup=main_menu()
         )
     else:
-        update.message.reply_text(
+        await update.message.reply_text(
             "Невірне місто.\nВикористайте /city щоб обрати.",
             reply_markup=main_menu()
         )
 
 
-def help_cmd(update: Update, context: CallbackContext):
-    update.message.reply_text(
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
         "/start — запустити моніторинг\n"
         "/stop — зупинити моніторинг\n"
         "/status — статус\n"
@@ -118,23 +123,22 @@ def main_menu():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
-def main():
+async def main():
     TOKEN = os.getenv("TOKEN")
 
-    updater = Updater(TOKEN, use_context=True)
-    dp = updater.dispatcher
+    application = ApplicationBuilder().token(TOKEN).build()
 
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CommandHandler("stop", stop))
-    dp.add_handler(CommandHandler("status", status))
-    dp.add_handler(CommandHandler("city", city))
-    dp.add_handler(CommandHandler("help", help_cmd))
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("stop", stop))
+    application.add_handler(CommandHandler("status", status))
+    application.add_handler(CommandHandler("city", city))
+    application.add_handler(CommandHandler("help", help_cmd))
 
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, city_choice))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, city_choice))
 
-    updater.start_polling()
-    updater.idle()
+    await application.run_polling()
 
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+    asyncio.run(main())
