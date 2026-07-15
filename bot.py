@@ -39,7 +39,8 @@ CITY_EMOJI = {
 }
 
 user_city = {}
-last_status = {}  # анти-спам: True = слоты были, False = не было
+last_status = {}  # анти-спам
+active_monitoring = {}  # состояние мониторинга
 
 CHECK_INTERVAL = 30
 
@@ -48,7 +49,7 @@ CHECK_INTERVAL = 30
 def main_menu():
     keyboard = [
         ["🔄 Статус", "🏙 Змінити місто"],
-        ["⛔ Зупинити моніторинг"]
+        ["⛔ Зупинити моніторинг", "▶️ Увімкнути моніторинг"]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -56,6 +57,11 @@ def main_menu():
 # === ПРОВЕРКА СЛОТОВ ===
 async def check_slots(context: ContextTypes.DEFAULT_TYPE):
     chat_id = context.job.chat_id
+
+    # если мониторинг выключен — ничего не делаем
+    if not active_monitoring.get(chat_id, False):
+        return
+
     city = user_city.get(chat_id, "Мюнхен")
     url = CITIES[city]
     emoji = CITY_EMOJI[city]
@@ -91,16 +97,49 @@ async def check_slots(context: ContextTypes.DEFAULT_TYPE):
         logging.error(f"Помилка: {e}")
 
 
-# === КОМАНДА /start ===
+# === ВКЛЮЧЕНИЕ МОНИТОРИНГА ===
+async def enable_monitoring(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    active_monitoring[chat_id] = True
+
+    await update.message.reply_text(
+        "▶️ Моніторинг увімкнено.",
+        reply_markup=main_menu()
+    )
+
+    # запускаем задачу, если её нет
+    context.job_queue.run_repeating(
+        check_slots,
+        interval=CHECK_INTERVAL,
+        first=5,
+        chat_id=chat_id,
+        name=str(chat_id)
+    )
+
+
+# === ОСТАНОВКА МОНИТОРИНГА ===
+async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    active_monitoring[chat_id] = False
+
+    await update.message.reply_text(
+        "⛔ Моніторинг зупинено.",
+        reply_markup=main_menu()
+    )
+
+
+# === СТАРТ ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
+
     user_city.setdefault(chat_id, "Мюнхен")
+    active_monitoring[chat_id] = True
 
     msg = (
         f"📍 Місто: {user_city[chat_id]}\n"
         f"🟢 Моніторинг активний\n"
         f"🎁 Безкоштовні сповіщення: необмежено\n\n"
-        f"Я повідомлю, коли з’являться вільні слоти у е-черзі Паспортного сервісу."
+        f"Я повідомлю, коли з’являться вільні слоти."
     )
 
     await update.message.reply_text(msg, reply_markup=main_menu())
@@ -109,27 +148,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         check_slots,
         interval=CHECK_INTERVAL,
         first=5,
-        chat_id=chat_id
-    )
-
-
-# === ОСТАНОВКА ===
-async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.job_queue.stop()
-    await update.message.reply_text(
-        "⛔ Моніторинг зупинено.",
-        reply_markup=main_menu()
+        chat_id=chat_id,
+        name=str(chat_id)
     )
 
 
 # === СТАТУС ===
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    city = user_city.get(update.effective_chat.id, "Мюнхен")
+    chat_id = update.effective_chat.id
+    city = user_city.get(chat_id, "Мюнхен")
+
+    state = "🟢 Активний" if active_monitoring.get(chat_id, False) else "⛔ Вимкнений"
+
     msg = (
         f"📍 Місто: {city}\n"
-        f"🟢 Моніторинг активний\n"
+        f"{state}\n"
         f"🎁 Безкоштовні сповіщення: необмежено"
     )
+
     await update.message.reply_text(msg, reply_markup=main_menu())
 
 
@@ -146,7 +182,7 @@ async def city_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if choice in CITIES:
         user_city[chat_id] = choice
-        last_status[choice] = False  # сбрасываем анти-спам
+        last_status[choice] = False
         await update.message.reply_text(
             f"🏙 Місто змінено на: {choice}",
             reply_markup=main_menu()
@@ -155,7 +191,7 @@ async def city_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # === ОБРАБОТКА МЕНЮ ===
 async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
+    text = update.message.text.strip()
 
     if text in ["🔄 Статус", "Статус"]:
         return await status(update, context)
@@ -165,6 +201,9 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text in ["⛔ Зупинити моніторинг", "Зупинити моніторинг"]:
         return await stop(update, context)
+
+    if text in ["▶️ Увімкнути моніторинг", "Увімкнути моніторинг"]:
+        return await enable_monitoring(update, context)
 
 
 # === ЗАПУСК ===
@@ -179,7 +218,7 @@ def main():
 
     application.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND &
-        filters.Regex("^(🔄 Статус|Статус|🏙 Змінити місто|Змінити місто|⛔ Зупинити моніторинг|Зупинити моніторинг)$"),
+        filters.Regex("^(🔄 Статус|Статус|🏙 Змінити місто|Змінити місто|⛔ Зупинити моніторинг|Зупинити моніторинг|▶️ Увімкнути моніторинг|Увімкнути моніторинг)$"),
         menu_handler
     ))
 
