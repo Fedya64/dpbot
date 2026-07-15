@@ -2,19 +2,28 @@ import os
 import logging
 import requests
 from bs4 import BeautifulSoup
-from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import (
+    Update,
+    ReplyKeyboardMarkup,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup
+)
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler,
-    MessageHandler, ContextTypes, filters
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters
 )
 
+# === ЛОГИ ===
 logging.basicConfig(
     filename="log.txt",
     level=logging.INFO,
     format="%(asctime)s - %(message)s"
 )
 
-# === МІСТА ===
+# === ГОРОДА ===
 CITIES = {
     "Мюнхен": "https://munich.pasport.org.ua/solutions/e-queue",
     "Берлін": "https://berlin.pasport.org.ua/solutions/e-queue",
@@ -35,6 +44,7 @@ last_status = {}  # анти-спам: True = слоты были, False = не 
 CHECK_INTERVAL = 30
 
 
+# === МЕНЮ ===
 def main_menu():
     keyboard = [
         ["🔄 Статус", "🏙 Змінити місто"],
@@ -43,6 +53,7 @@ def main_menu():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
+# === ПРОВЕРКА СЛОТОВ ===
 async def check_slots(context: ContextTypes.DEFAULT_TYPE):
     chat_id = context.job.chat_id
     city = user_city.get(chat_id, "Мюнхен")
@@ -80,6 +91,7 @@ async def check_slots(context: ContextTypes.DEFAULT_TYPE):
         logging.error(f"Помилка: {e}")
 
 
+# === КОМАНДА /start ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user_city.setdefault(chat_id, "Мюнхен")
@@ -101,6 +113,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# === ОСТАНОВКА ===
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.job_queue.stop()
     await update.message.reply_text(
@@ -109,6 +122,7 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# === СТАТУС ===
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     city = user_city.get(update.effective_chat.id, "Мюнхен")
     msg = (
@@ -119,6 +133,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, reply_markup=main_menu())
 
 
+# === ВЫБОР ГОРОДА ===
 async def city(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[city] for city in CITIES.keys()]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -138,19 +153,21 @@ async def city_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+# === ОБРАБОТКА МЕНЮ ===
 async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
 
-    if text == "🔄 Статус":
+    if text in ["🔄 Статус", "Статус"]:
         return await status(update, context)
 
-    if text == "🏙 Змінити місто":
+    if text in ["🏙 Змінити місто", "Змінити місто"]:
         return await city(update, context)
 
-    if text == "⛔ Зупинити моніторинг":
+    if text in ["⛔ Зупинити моніторинг", "Зупинити моніторинг"]:
         return await stop(update, context)
 
 
+# === ЗАПУСК ===
 def main():
     TOKEN = os.getenv("TOKEN")
     application = ApplicationBuilder().token(TOKEN).build()
@@ -162,7 +179,7 @@ def main():
 
     application.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND &
-        filters.Regex("^(🔄 Статус|🏙 Змінити місто|⛔ Зупинити моніторинг)$"),
+        filters.Regex("^(🔄 Статус|Статус|🏙 Змінити місто|Змінити місто|⛔ Зупинити моніторинг|Зупинити моніторинг)$"),
         menu_handler
     ))
 
