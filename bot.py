@@ -39,12 +39,17 @@ CITY_EMOJI = {
     "Варшава": "🟠",
 }
 
-user_city = {}
-last_status = {}
-active_monitoring = {}
+user_city: dict[int, str] = {}
+last_status: dict[tuple[int, str], bool] = {}  # (chat_id, city) -> bool
+active_monitoring: dict[int, bool] = {}
 debug_checks = []  # последние 5 проверок
 
 CHECK_INTERVAL = 30
+
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+)
 
 
 # === БАЗА ДЛЯ СТАТИСТИКИ ===
@@ -55,6 +60,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS slots (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             city TEXT,
+            chat_id INTEGER,
             opened_at TEXT,
             closed_at TEXT,
             duration_min REAL,
@@ -93,24 +99,38 @@ async def check_slots(context: ContextTypes.DEFAULT_TYPE):
     emoji = CITY_EMOJI[city]
 
     try:
-        r = requests.get(url, timeout=10)
-        r.raise_for_status()
+        r = requests.get(
+            url,
+            timeout=10,
+            headers={"User-Agent": USER_AGENT}
+        )
 
-        # лог HTML
-        with open("last_page.html", "w", encoding="utf-8") as f:
-            f.write(r.text)
+        if r.status_code != 200:
+            logging.warning(
+                f"[{chat_id}] {city}: статус {r.status_code}, слоты считаем недоступными"
+            )
+            slots_available = False
+        else:
+            try:
+                with open("last_page.html", "w", encoding="utf-8") as f:
+                    f.write(r.text)
+            except Exception as fe:
+                logging.debug(f"Не удалось записать last_page.html: {fe}")
 
-        soup = BeautifulSoup(r.text, "html.parser")
+            soup = BeautifulSoup(r.text, "html.parser")
+            page_text = soup.get_text(separator=" ").replace("\n", " ").replace("\r", " ").strip()
 
-        # очищенный текст
-        page_text = soup.get_text(separator=" ").replace("\n", " ").replace("\r", " ").strip()
-        with open("last_text.txt", "w", encoding="utf-8") as f:
-            f.write(page_text)
+            try:
+                with open("last_text.txt", "w", encoding="utf-8") as f:
+                    f.write(page_text)
+            except Exception as fe:
+                logging.debug(f"Не удалось записать last_text.txt: {fe}")
 
-        # детектор отсутствия слотов
-        slots_available = "Наразі всі місця зайняті" not in page_text
+            if not page_text:
+                slots_available = False
+            else:
+                slots_available = "Наразі всі місця зайняті" not in page_text
 
-        # debug лог
         debug_checks.append({
             "time": datetime.now().strftime("%H:%M:%S"),
             "city": city,
@@ -119,18 +139,20 @@ async def check_slots(context: ContextTypes.DEFAULT_TYPE):
         if len(debug_checks) > 5:
             debug_checks.pop(0)
 
+        key = (chat_id, city)
+
         # === СЛОТ ПОЯВИЛСЯ ===
-        if slots_available and not last_status.get(city, False):
-            last_status[city] = True
+        if slots_available and not last_status.get(key, False):
+            last_status[key] = True
 
             now = datetime.now()
 
             conn = sqlite3.connect("slots.db")
             cur = conn.cursor()
             cur.execute("""
-                INSERT INTO slots (city, opened_at, weekday, hour)
-                VALUES (?, ?, ?, ?)
-            """, (city, now.isoformat(), now.weekday(), now.hour))
+                INSERT INTO slots (city, chat_id, opened_at, weekday, hour)
+                VALUES (?, ?, ?, ?, ?)
+            """, (city, chat_id, now.isoformat(), now.weekday(), now.hour))
             conn.commit()
             conn.close()
 
@@ -144,20 +166,23 @@ async def check_slots(context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("Перейти до запису", url=url)]
             ])
 
-            await context.bot.send_message(chat_id=chat_id, text=msg, reply_markup=keyboard)
+            try:
+                await context.bot.send_message(chat_id=chat_id, text=msg, reply_markup=keyboard)
+            except Exception as te:
+                logging.error(f"Помилка надсилання повідомлення в Telegram: {te}")
 
         # === СЛОТ ИСЧЕЗ ===
-        elif not slots_available and last_status.get(city, False):
-            last_status[city] = False
+        elif not slots_available and last_status.get(key, False):
+            last_status[key] = False
 
             conn = sqlite3.connect("slots.db")
             cur = conn.cursor()
 
             cur.execute("""
                 SELECT id, opened_at FROM slots
-                WHERE city = ? AND closed_at IS NULL
+                WHERE city = ? AND chat_id = ? AND closed_at IS NULL
                 ORDER BY id DESC LIMIT 1
-            """, (city,))
+            """, (city, chat_id))
             row = cur.fetchone()
 
             if row:
@@ -176,7 +201,24 @@ async def check_slots(context: ContextTypes.DEFAULT_TYPE):
             conn.close()
 
     except Exception as e:
-        logging.error(f"Помилка: {e}")
+        logging.error(f"Помилка перевірки слотів для {chat_id}/{city}: {e}")
+
+
+def _ensure_single_job(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+    jobs = context.job_queue.get_jobs_by_name(str(chat_id))
+    for j in jobs:
+        j.schedule_removal()
+
+
+def _start_monitoring_job(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+    _ensure_single_job(context, chat_id)
+    context.job_queue.run_repeating(
+        check_slots,
+        interval=CHECK_INTERVAL,
+        first=5,
+        chat_id=chat_id,
+        name=str(chat_id)
+    )
 
 
 # === ВКЛЮЧЕНИЕ МОНИТОРИНГА ===
@@ -189,19 +231,15 @@ async def enable_monitoring(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_menu()
     )
 
-    context.job_queue.run_repeating(
-        check_slots,
-        interval=CHECK_INTERVAL,
-        first=5,
-        chat_id=chat_id,
-        name=str(chat_id)
-    )
+    _start_monitoring_job(context, chat_id)
 
 
 # === ОСТАНОВКА МОНИТОРИНГА ===
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     active_monitoring[chat_id] = False
+
+    _ensure_single_job(context, chat_id)
 
     await update.message.reply_text(
         "⛔ Моніторинг зупинено.",
@@ -225,13 +263,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(msg, reply_markup=main_menu())
 
-    context.job_queue.run_repeating(
-        check_slots,
-        interval=CHECK_INTERVAL,
-        first=5,
-        chat_id=chat_id,
-        name=str(chat_id)
-    )
+    _start_monitoring_job(context, chat_id)
 
 
 # === СТАТУС ===
@@ -258,28 +290,28 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = sqlite3.connect("slots.db")
     cur = conn.cursor()
 
-    cur.execute("SELECT COUNT(*) FROM slots WHERE city = ?", (city,))
+    cur.execute("SELECT COUNT(*) FROM slots WHERE city = ? AND chat_id = ?", (city, chat_id))
     count = cur.fetchone()[0]
 
-    cur.execute("SELECT AVG(duration_min) FROM slots WHERE city = ?", (city,))
+    cur.execute("SELECT AVG(duration_min) FROM slots WHERE city = ? AND chat_id = ?", (city, chat_id))
     avg_duration = cur.fetchone()[0]
 
     cur.execute("""
         SELECT weekday, COUNT(*) FROM slots
-        WHERE city = ?
+        WHERE city = ? AND chat_id = ?
         GROUP BY weekday
         ORDER BY COUNT(*) DESC
         LIMIT 1
-    """, (city,))
+    """, (city, chat_id))
     row_day = cur.fetchone()
 
     cur.execute("""
         SELECT hour, COUNT(*) FROM slots
-        WHERE city = ?
+        WHERE city = ? AND chat_id = ?
         GROUP BY hour
         ORDER BY COUNT(*) DESC
         LIMIT 1
-    """, (city,))
+    """, (city, chat_id))
     row_hour = cur.fetchone()
 
     conn.close()
@@ -313,8 +345,8 @@ async def slotstats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cur.execute("""
         SELECT AVG(duration_min)
         FROM slots
-        WHERE city = ? AND duration_min IS NOT NULL
-    """, (city,))
+        WHERE city = ? AND chat_id = ? AND duration_min IS NOT NULL
+    """, (city, chat_id))
     avg_duration = cur.fetchone()[0]
     conn.close()
 
@@ -341,11 +373,11 @@ async def slotday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cur.execute("""
         SELECT weekday, COUNT(*)
         FROM slots
-        WHERE city = ?
+        WHERE city = ? AND chat_id = ?
         GROUP BY weekday
         ORDER BY COUNT(*) DESC
         LIMIT 1
-    """, (city,))
+    """, (city, chat_id))
     row = cur.fetchone()
     conn.close()
 
@@ -375,11 +407,11 @@ async def slothour(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cur.execute("""
         SELECT hour, COUNT(*)
         FROM slots
-        WHERE city = ?
+        WHERE city = ? AND chat_id = ?
         GROUP BY hour
         ORDER BY COUNT(*) DESC
         LIMIT 1
-    """, (city,))
+    """, (city, chat_id))
     row = cur.fetchone()
     conn.close()
 
@@ -408,10 +440,10 @@ async def lastslot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cur.execute("""
         SELECT opened_at, closed_at, duration_min
         FROM slots
-        WHERE city = ?
+        WHERE city = ? AND chat_id = ?
         ORDER BY id DESC
         LIMIT 1
-    """, (city,))
+    """, (city, chat_id))
     row = cur.fetchone()
     conn.close()
 
@@ -462,7 +494,7 @@ async def city_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if choice in CITIES:
         user_city[chat_id] = choice
-        last_status[choice] = False
+        last_status[(chat_id, choice)] = False
         await update.message.reply_text(
             f"🏙 Місто змінено на: {choice}",
             reply_markup=main_menu()
@@ -507,6 +539,9 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # === ЗАПУСК ===
 def main():
     TOKEN = os.getenv("TOKEN")
+    if not TOKEN:
+        raise RuntimeError("Не задано TOKEN в змінних оточення.")
+
     init_db()
 
     application = ApplicationBuilder().token(TOKEN).build()
