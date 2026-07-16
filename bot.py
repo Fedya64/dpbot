@@ -1,6 +1,8 @@
 import os
 import logging
 import requests
+import sqlite3
+from datetime import datetime
 from bs4 import BeautifulSoup
 from telegram import (
     Update,
@@ -16,9 +18,8 @@ from telegram.ext import (
     filters
 )
 
-# === ЛОГИ ===
+# === ЛОГИ В КОНСОЛЬ (Railway Logs) ===
 logging.basicConfig(
-    filename="log.txt",
     level=logging.INFO,
     format="%(asctime)s - %(message)s"
 )
@@ -39,16 +40,36 @@ CITY_EMOJI = {
 }
 
 user_city = {}
-last_status = {}  # анти-спам
-active_monitoring = {}  # состояние мониторинга
+last_status = {}
+active_monitoring = {}
 
 CHECK_INTERVAL = 30
+
+
+# === ІНІЦІАЛІЗАЦІЯ БАЗИ ===
+def init_db():
+    conn = sqlite3.connect("slots.db")
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS slots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            city TEXT,
+            opened_at TEXT,
+            closed_at TEXT,
+            duration_min REAL,
+            weekday INTEGER,
+            hour INTEGER
+        )
+    """)
+    conn.commit()
+    conn.close()
 
 
 # === МЕНЮ ===
 def main_menu():
     keyboard = [
         ["🔄 Статус", "🏙 Змінити місто"],
+        ["📊 Статистика термінів"],
         ["⛔ Зупинити моніторинг", "▶️ Увімкнути моніторинг"]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -58,7 +79,6 @@ def main_menu():
 async def check_slots(context: ContextTypes.DEFAULT_TYPE):
     chat_id = context.job.chat_id
 
-    # если мониторинг выключен — ничего не делаем
     if not active_monitoring.get(chat_id, False):
         return
 
@@ -73,9 +93,20 @@ async def check_slots(context: ContextTypes.DEFAULT_TYPE):
 
         slots_available = "Наразі всі місця зайняті" not in soup.text
 
-        # === АНТИ-СПАМ ===
+        # === СЛОТ З'ЯВИВСЯ ===
         if slots_available and not last_status.get(city, False):
             last_status[city] = True
+
+            now = datetime.now()
+
+            conn = sqlite3.connect("slots.db")
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO slots (city, opened_at, weekday, hour)
+                VALUES (?, ?, ?, ?)
+            """, (city, now.isoformat(), now.weekday(), now.hour))
+            conn.commit()
+            conn.close()
 
             msg = (
                 f"{emoji} {city.upper()} — З'ЯВИЛИСЬ ВІЛЬНІ ТЕРМІНИ!\n"
@@ -90,14 +121,40 @@ async def check_slots(context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=chat_id, text=msg, reply_markup=keyboard)
             logging.info(f"Слоти знайдено для {city}")
 
-        elif not slots_available:
+        # === СЛОТ ЗНИК ===
+        elif not slots_available and last_status.get(city, False):
             last_status[city] = False
+
+            conn = sqlite3.connect("slots.db")
+            cur = conn.cursor()
+
+            cur.execute("""
+                SELECT id, opened_at FROM slots
+                WHERE city = ? AND closed_at IS NULL
+                ORDER BY id DESC LIMIT 1
+            """, (city,))
+            row = cur.fetchone()
+
+            if row:
+                slot_id, opened_at = row
+                opened_dt = datetime.fromisoformat(opened_at)
+                closed_dt = datetime.now()
+                duration = (closed_dt - opened_dt).total_seconds() / 60.0
+
+                cur.execute("""
+                    UPDATE slots
+                    SET closed_at = ?, duration_min = ?
+                    WHERE id = ?
+                """, (closed_dt.isoformat(), duration, slot_id))
+                conn.commit()
+
+            conn.close()
 
     except Exception as e:
         logging.error(f"Помилка: {e}")
 
 
-# === ВКЛЮЧЕНИЕ МОНИТОРИНГА ===
+# === ВКЛЮЧЕННЯ МОНИТОРИНГА ===
 async def enable_monitoring(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     active_monitoring[chat_id] = True
@@ -107,7 +164,6 @@ async def enable_monitoring(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_menu()
     )
 
-    # запускаем задачу, если её нет
     context.job_queue.run_repeating(
         check_slots,
         interval=CHECK_INTERVAL,
@@ -117,7 +173,7 @@ async def enable_monitoring(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# === ОСТАНОВКА МОНИТОРИНГА ===
+# === ЗУПИНКА ===
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     active_monitoring[chat_id] = False
@@ -153,23 +209,63 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# === СТАТУС ===
-async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# === СТАТИСТИКА ===
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     city = user_city.get(chat_id, "Мюнхен")
 
-    state = "🟢 Активний" if active_monitoring.get(chat_id, False) else "⛔ Вимкнений"
+    conn = sqlite3.connect("slots.db")
+    cur = conn.cursor()
+
+    # кількість вікон
+    cur.execute("SELECT COUNT(*) FROM slots WHERE city = ?", (city,))
+    count = cur.fetchone()[0]
+
+    # середня тривалість
+    cur.execute("SELECT AVG(duration_min) FROM slots WHERE city = ?", (city,))
+    avg_duration = cur.fetchone()[0]
+
+    # найчастіший день тижня
+    cur.execute("""
+        SELECT weekday, COUNT(*) FROM slots
+        WHERE city = ?
+        GROUP BY weekday
+        ORDER BY COUNT(*) DESC
+        LIMIT 1
+    """, (city,))
+    row_day = cur.fetchone()
+
+    # найчастіша година
+    cur.execute("""
+        SELECT hour, COUNT(*) FROM slots
+        WHERE city = ?
+        GROUP BY hour
+        ORDER BY COUNT(*) DESC
+        LIMIT 1
+    """, (city,))
+    row_hour = cur.fetchone()
+
+    conn.close()
+
+    avg_text = f"{avg_duration:.1f} хв" if avg_duration else "немає даних"
+
+    weekday_names = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
+    day_text = weekday_names[row_day[0]] if row_day else "немає даних"
+    hour_text = f"{row_hour[0]}:00" if row_hour else "немає даних"
 
     msg = (
-        f"📍 Місто: {city}\n"
-        f"{state}\n"
-        f"🎁 Безкоштовні сповіщення: необмежено"
+        f"📊 Статистика появи термінів за {city}:\n"
+        f"• Вікон доступності: {count}\n"
+        f"• Середня тривалість вікна: {avg_text}\n"
+        f"• Найчастіший день: {day_text}\n"
+        f"• Пік по годинах: {hour_text}\n"
+        f"• Дані збираються автоматично ботом"
     )
 
     await update.message.reply_text(msg, reply_markup=main_menu())
 
 
-# === ВЫБОР ГОРОДА ===
+# === ВИБІР МІСТА ===
 async def city(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[city] for city in CITIES.keys()]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -189,7 +285,7 @@ async def city_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-# === ОБРАБОТКА МЕНЮ ===
+# === ОБРОБКА МЕНЮ ===
 async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
 
@@ -198,6 +294,9 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text in ["🏙 Змінити місто", "Змінити місто"]:
         return await city(update, context)
+
+    if text in ["📊 Статистика термінів", "Статистика термінів"]:
+        return await stats(update, context)
 
     if text in ["⛔ Зупинити моніторинг", "Зупинити моніторинг"]:
         return await stop(update, context)
@@ -209,16 +308,19 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # === ЗАПУСК ===
 def main():
     TOKEN = os.getenv("TOKEN")
+    init_db()
+
     application = ApplicationBuilder().token(TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("stop", stop))
     application.add_handler(CommandHandler("status", status))
     application.add_handler(CommandHandler("city", city))
+    application.add_handler(CommandHandler("stats", stats))
 
     application.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND &
-        filters.Regex("^(🔄 Статус|Статус|🏙 Змінити місто|Змінити місто|⛔ Зупинити моніторинг|Зупинити моніторинг|▶️ Увімкнути моніторинг|Увімкнути моніторинг)$"),
+        filters.Regex("^(🔄 Статус|Статус|🏙 Змінити місто|Змінити місто|📊 Статистика термінів|Статистика термінів|⛔ Зупинити моніторинг|Зупинити моніторинг|▶️ Увімкнути моніторинг|Увімкнути моніторинг)$"),
         menu_handler
     ))
 
