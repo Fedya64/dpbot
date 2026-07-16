@@ -42,6 +42,7 @@ CITY_EMOJI = {
 user_city = {}
 last_status = {}
 active_monitoring = {}
+debug_checks = []  # останні перевірки для /debug
 
 CHECK_INTERVAL = 30
 
@@ -69,7 +70,9 @@ def init_db():
 def main_menu():
     keyboard = [
         ["🔄 Статус", "🏙 Змінити місто"],
-        ["📊 Статистика термінів"],
+        ["📊 Статистика термінів", "🕓 Останній термін"],
+        ["⏱ Середня тривалість", "📅 Найчастіший день"],
+        ["⏰ Пікова година", "🛠 Debug"],
         ["⛔ Зупинити моніторинг", "▶️ Увімкнути моніторинг"]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -89,9 +92,29 @@ async def check_slots(context: ContextTypes.DEFAULT_TYPE):
     try:
         r = requests.get(url, timeout=10)
         r.raise_for_status()
+
+        # лог сирого HTML
+        with open("last_page.html", "w", encoding="utf-8") as f:
+            f.write(r.text)
+
         soup = BeautifulSoup(r.text, "html.parser")
 
-        slots_available = "Наразі всі місця зайняті" not in soup.text
+        # очищений текст сторінки
+        page_text = soup.get_text(separator=" ").replace("\n", " ").replace("\r", " ").strip()
+        with open("last_text.txt", "w", encoding="utf-8") as f:
+            f.write(page_text)
+
+        # детектор відсутності слотів — ловить будь-який варіант фрази
+        slots_available = "Наразі всі місця зайняті" not in page_text
+
+        # запис у debug-лог
+        debug_checks.append({
+            "time": datetime.now().strftime("%H:%M:%S"),
+            "city": city,
+            "available": slots_available
+        })
+        if len(debug_checks) > 5:
+            debug_checks.pop(0)
 
         # === СЛОТ З'ЯВИВСЯ ===
         if slots_available and not last_status.get(city, False):
@@ -277,6 +300,153 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, reply_markup=main_menu())
 
 
+# === /slotstats — середня тривалість термінів ===
+async def slotstats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    city = user_city.get(chat_id, "Мюнхен")
+
+    conn = sqlite3.connect("slots.db")
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT AVG(duration_min)
+        FROM slots
+        WHERE city = ? AND duration_min IS NOT NULL
+    """, (city,))
+    avg_duration = cur.fetchone()[0]
+    conn.close()
+
+    if not avg_duration:
+        await update.message.reply_text("Поки немає даних про тривалість термінів.")
+        return
+
+    msg = (
+        f"⏱ Середня тривалість термінів у {city}:\n"
+        f"• {avg_duration:.1f} хвилин"
+    )
+
+    await update.message.reply_text(msg)
+
+
+# === /slotday — найчастіший день появи ===
+async def slotday(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    city = user_city.get(chat_id, "Мюнхен")
+
+    conn = sqlite3.connect("slots.db")
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT weekday, COUNT(*)
+        FROM slots
+        WHERE city = ?
+        GROUP BY weekday
+        ORDER BY COUNT(*) DESC
+        LIMIT 1
+    """, (city,))
+    row = cur.fetchone()
+    conn.close()
+
+    if not row:
+        await update.message.reply_text("Поки немає даних про дні появи термінів.")
+        return
+
+    weekday_names = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
+    day_name = weekday_names[row[0]]
+
+    msg = (
+        f"📅 Найчастіший день появи термінів у {city}:\n"
+        f"• {day_name}"
+    )
+
+    await update.message.reply_text(msg)
+
+
+# === /slothour — пікова година появи ===
+async def slothour(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    city = user_city.get(chat_id, "Мюнхен")
+
+    conn = sqlite3.connect("slots.db")
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT hour, COUNT(*)
+        FROM slots
+        WHERE city = ?
+        GROUP BY hour
+        ORDER BY COUNT(*) DESC
+        LIMIT 1
+    """, (city,))
+    row = cur.fetchone()
+    conn.close()
+
+    if not row:
+        await update.message.reply_text("Поки немає даних про години появи термінів.")
+        return
+
+    hour, count = row
+    msg = (
+        f"⏰ Пікова година появи термінів у {city}:\n"
+        f"• {hour}:00\n"
+        f"• Кількість появ: {count}"
+    )
+
+    await update.message.reply_text(msg)
+
+
+# === /lastslot — останній термін ===
+async def lastslot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    city = user_city.get(chat_id, "Мюнхен")
+
+    conn = sqlite3.connect("slots.db")
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT opened_at, closed_at, duration_min
+        FROM slots
+        WHERE city = ?
+        ORDER BY id DESC
+        LIMIT 1
+    """, (city,))
+    row = cur.fetchone()
+    conn.close()
+
+    if not row:
+        await update.message.reply_text("Поки немає жодного зафіксованого терміну.")
+        return
+
+    opened_at, closed_at, duration = row
+
+    opened_dt = datetime.fromisoformat(opened_at).strftime("%d.%m %H:%M")
+    closed_dt = closed_at and datetime.fromisoformat(closed_at).strftime("%d.%m %H:%M")
+    duration_text = f"{duration:.1f} хв" if duration else "невідомо"
+
+    msg = (
+        f"🕓 Останній термін у {city}:\n"
+        f"• Початок: {opened_dt}\n"
+        f"• Кінець: {closed_dt or 'ще триває'}\n"
+        f"• Тривалість: {duration_text}"
+    )
+
+    await update.message.reply_text(msg)
+
+
+# === /debug — останні 5 перевірок ===
+async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not debug_checks:
+        await update.message.reply_text("Поки немає даних для debug.")
+        return
+
+    msg = "🛠 Останні 5 перевірок:\n\n"
+    for item in debug_checks:
+        status = "СЛОТИ Є !!!" if item["available"] else "слотів немає"
+        msg += f"{item['time']} — {item['city']} — {status}\n"
+
+    await update.message.reply_text(msg)
+
+
 # === ВЫБОР ГОРОДА ===
 async def city(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[city] for city in CITIES.keys()]
@@ -310,6 +480,21 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text in ["📊 Статистика термінів", "Статистика термінів"]:
         return await stats(update, context)
 
+    if text in ["🕓 Останній термін", "Останній термін"]:
+        return await lastslot(update, context)
+
+    if text in ["⏱ Середня тривалість", "Середня тривалість"]:
+        return await slotstats(update, context)
+
+    if text in ["📅 Найчастіший день", "Найчастіший день"]:
+        return await slotday(update, context)
+
+    if text in ["⏰ Пікова година", "Пікова година"]:
+        return await slothour(update, context)
+
+    if text in ["🛠 Debug", "Debug"]:
+        return await debug(update, context)
+
     if text in ["⛔ Зупинити моніторинг", "Зупинити моніторинг"]:
         return await stop(update, context)
 
@@ -329,10 +514,26 @@ def main():
     application.add_handler(CommandHandler("status", status))
     application.add_handler(CommandHandler("city", city))
     application.add_handler(CommandHandler("stats", stats))
+    application.add_handler(CommandHandler("slotstats", slotstats))
+    application.add_handler(CommandHandler("slotday", slotday))
+    application.add_handler(CommandHandler("slothour", slothour))
+    application.add_handler(CommandHandler("lastslot", lastslot))
+    application.add_handler(CommandHandler("debug", debug))
 
     application.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND &
-        filters.Regex("^(🔄 Статус|Статус|🏙 Змінити місто|Змінити місто|📊 Статистика термінів|Статистика термінів|⛔ Зупинити моніторинг|Зупинити моніторинг|▶️ Увімкнути моніторинг|Увімкнути моніторинг)$"),
+        filters.Regex(
+            "^(🔄 Статус|Статус|"
+            "🏙 Змінити місто|Змінити місто|"
+            "📊 Статистика термінів|Статистика термінів|"
+            "🕓 Останній термін|Останній термін|"
+            "⏱ Середня тривалість|Середня тривалість|"
+            "📅 Найчастіший день|Найчастіший день|"
+            "⏰ Пікова година|Пікова година|"
+            "🛠 Debug|Debug|"
+            "⛔ Зупинити моніторинг|Зупинити моніторинг|"
+            "▶️ Увімкнути моніторинг|Увімкнути моніторинг)$"
+        ),
         menu_handler
     ))
 
