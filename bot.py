@@ -42,7 +42,7 @@ CITY_EMOJI = {
 user_city = {}
 last_status = {}
 active_monitoring = {}
-debug_checks = []  # останні 5 перевірок
+debug_checks = []  # последние 5 проверок
 
 CHECK_INTERVAL = 30
 
@@ -96,21 +96,21 @@ async def check_slots(context: ContextTypes.DEFAULT_TYPE):
         r = requests.get(url, timeout=10)
         r.raise_for_status()
 
-        # лог сирого HTML
+        # лог HTML
         with open("last_page.html", "w", encoding="utf-8") as f:
             f.write(r.text)
 
         soup = BeautifulSoup(r.text, "html.parser")
 
-        # очищений текст сторінки
+        # очищенный текст
         page_text = soup.get_text(separator=" ").replace("\n", " ").replace("\r", " ").strip()
         with open("last_text.txt", "w", encoding="utf-8") as f:
             f.write(page_text)
 
-        # детектор відсутності слотів — ловить будь-який варіант фрази
+        # детектор отсутствия слотов
         slots_available = "Наразі всі місця зайняті" not in page_text
 
-        # запис у debug-лог
+        # debug лог
         debug_checks.append({
             "time": datetime.now().strftime("%H:%M:%S"),
             "city": city,
@@ -119,7 +119,7 @@ async def check_slots(context: ContextTypes.DEFAULT_TYPE):
         if len(debug_checks) > 5:
             debug_checks.pop(0)
 
-        # === СЛОТ З'ЯВИВСЯ ===
+        # === СЛОТ ПОЯВИЛСЯ ===
         if slots_available and not last_status.get(city, False):
             last_status[city] = True
 
@@ -145,9 +145,8 @@ async def check_slots(context: ContextTypes.DEFAULT_TYPE):
             ])
 
             await context.bot.send_message(chat_id=chat_id, text=msg, reply_markup=keyboard)
-            logging.info(f"Слоти знайдено для {city}")
 
-        # === СЛОТ ЗНИК ===
+        # === СЛОТ ИСЧЕЗ ===
         elif not slots_available and last_status.get(city, False):
             last_status[city] = False
 
@@ -303,7 +302,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, reply_markup=main_menu())
 
 
-# === /slotstats — середня тривалість ===
+# === /slotstats ===
 async def slotstats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     city = user_city.get(chat_id, "Мюнхен")
@@ -331,7 +330,7 @@ async def slotstats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 
-# === /slotday — найчастіший день ===
+# === /slotday ===
 async def slotday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     city = user_city.get(chat_id, "Мюнхен")
@@ -365,7 +364,7 @@ async def slotday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 
-# === /slothour — пікова година ===
+# === /slothour ===
 async def slothour(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     city = user_city.get(chat_id, "Мюнхен")
@@ -398,7 +397,7 @@ async def slothour(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 
-# === /lastslot — останній термін ===
+# === /lastslot ===
 async def lastslot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     city = user_city.get(chat_id, "Мюнхен")
@@ -436,7 +435,7 @@ async def lastslot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 
-# === /debug — останні 5 перевірок ===
+# === /debug ===
 async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not debug_checks:
         await update.message.reply_text("Поки немає даних для debug.")
@@ -516,4 +515,7 @@ def main():
     application.add_handler(CommandHandler("stop", stop))
     application.add_handler(CommandHandler("status", status))
     application.add_handler(CommandHandler("city", city))
-    application.add_handler(CommandHandler("
+    application.add_handler(CommandHandler("stats", stats))
+    application.add_handler(CommandHandler("slotstats", slotstats))
+    application.add_handler(CommandHandler("slotday", slotday))
+    application.add_handler(CommandHandler("slothour", slothour))
