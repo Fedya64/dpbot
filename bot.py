@@ -42,7 +42,7 @@ CITY_EMOJI = {
 user_city = {}
 last_status = {}
 active_monitoring = {}
-debug_checks = []  # останні перевірки для /debug
+debug_checks = []  # останні 5 перевірок
 
 CHECK_INTERVAL = 30
 
@@ -70,10 +70,13 @@ def init_db():
 def main_menu():
     keyboard = [
         ["🔄 Статус", "🏙 Змінити місто"],
-        ["📊 Статистика термінів", "🕓 Останній термін"],
-        ["⏱ Середня тривалість", "📅 Найчастіший день"],
-        ["⏰ Пікова година", "🛠 Debug"],
-        ["⛔ Зупинити моніторинг", "▶️ Увімкнути моніторинг"]
+        ["⛔ Зупинити моніторинг", "▶️ Увімкнути моніторинг"],
+        ["📊 Статистика термінів"],
+        ["🕓 Останній термін"],
+        ["⏱ Середня тривалість"],
+        ["📅 Найчастіший день"],
+        ["⏰ Пікова година"],
+        ["🛠 Debug"]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -300,7 +303,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, reply_markup=main_menu())
 
 
-# === /slotstats — середня тривалість термінів ===
+# === /slotstats — середня тривалість ===
 async def slotstats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     city = user_city.get(chat_id, "Мюнхен")
@@ -328,7 +331,7 @@ async def slotstats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 
-# === /slotday — найчастіший день появи ===
+# === /slotday — найчастіший день ===
 async def slotday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     city = user_city.get(chat_id, "Мюнхен")
@@ -362,7 +365,7 @@ async def slotday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 
-# === /slothour — пікова година появи ===
+# === /slothour — пікова година ===
 async def slothour(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     city = user_city.get(chat_id, "Мюнхен")
@@ -513,38 +516,4 @@ def main():
     application.add_handler(CommandHandler("stop", stop))
     application.add_handler(CommandHandler("status", status))
     application.add_handler(CommandHandler("city", city))
-    application.add_handler(CommandHandler("stats", stats))
-    application.add_handler(CommandHandler("slotstats", slotstats))
-    application.add_handler(CommandHandler("slotday", slotday))
-    application.add_handler(CommandHandler("slothour", slothour))
-    application.add_handler(CommandHandler("lastslot", lastslot))
-    application.add_handler(CommandHandler("debug", debug))
-
-    application.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND &
-        filters.Regex(
-            "^(🔄 Статус|Статус|"
-            "🏙 Змінити місто|Змінити місто|"
-            "📊 Статистика термінів|Статистика термінів|"
-            "🕓 Останній термін|Останній термін|"
-            "⏱ Середня тривалість|Середня тривалість|"
-            "📅 Найчастіший день|Найчастіший день|"
-            "⏰ Пікова година|Пікова година|"
-            "🛠 Debug|Debug|"
-            "⛔ Зупинити моніторинг|Зупинити моніторинг|"
-            "▶️ Увімкнути моніторинг|Увімкнути моніторинг)$"
-        ),
-        menu_handler
-    ))
-
-    application.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND &
-        filters.Regex("^(Мюнхен|Берлін|Прага|Варшава)$"),
-        city_choice
-    ))
-
-    application.run_polling()
-
-
-if __name__ == "__main__":
-    main()
+    application.add_handler(CommandHandler("
