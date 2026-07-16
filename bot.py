@@ -18,7 +18,7 @@ from telegram.ext import (
     filters
 )
 
-# === ЛОГИ В КОНСОЛЬ (Railway Logs) ===
+# === ЛОГИ ===
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(message)s"
@@ -46,7 +46,7 @@ active_monitoring = {}
 CHECK_INTERVAL = 30
 
 
-# === ІНІЦІАЛІЗАЦІЯ БАЗИ ===
+# === БАЗА ДЛЯ СТАТИСТИКИ ===
 def init_db():
     conn = sqlite3.connect("slots.db")
     cur = conn.cursor()
@@ -154,7 +154,7 @@ async def check_slots(context: ContextTypes.DEFAULT_TYPE):
         logging.error(f"Помилка: {e}")
 
 
-# === ВКЛЮЧЕННЯ МОНИТОРИНГА ===
+# === ВКЛЮЧЕНИЕ МОНИТОРИНГА ===
 async def enable_monitoring(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     active_monitoring[chat_id] = True
@@ -173,7 +173,7 @@ async def enable_monitoring(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# === ЗУПИНКА ===
+# === ОСТАНОВКА МОНИТОРИНГА ===
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     active_monitoring[chat_id] = False
@@ -209,6 +209,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# === СТАТУС ===
+async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    city = user_city.get(chat_id, "Мюнхен")
+
+    state = "🟢 Активний" if active_monitoring.get(chat_id, False) else "⛔ Вимкнений"
+
+    msg = (
+        f"📍 Місто: {city}\n"
+        f"{state}\n"
+        f"🎁 Безкоштовні сповіщення: необмежено"
+    )
+
+    await update.message.reply_text(msg, reply_markup=main_menu())
+
+
 # === СТАТИСТИКА ===
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -217,15 +233,12 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = sqlite3.connect("slots.db")
     cur = conn.cursor()
 
-    # кількість вікон
     cur.execute("SELECT COUNT(*) FROM slots WHERE city = ?", (city,))
     count = cur.fetchone()[0]
 
-    # середня тривалість
     cur.execute("SELECT AVG(duration_min) FROM slots WHERE city = ?", (city,))
     avg_duration = cur.fetchone()[0]
 
-    # найчастіший день тижня
     cur.execute("""
         SELECT weekday, COUNT(*) FROM slots
         WHERE city = ?
@@ -235,7 +248,6 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """, (city,))
     row_day = cur.fetchone()
 
-    # найчастіша година
     cur.execute("""
         SELECT hour, COUNT(*) FROM slots
         WHERE city = ?
@@ -256,16 +268,16 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
         f"📊 Статистика появи термінів за {city}:\n"
         f"• Вікон доступності: {count}\n"
-        f"• Середня тривалість вікна: {avg_text}\n"
+        f"• Середня тривалість: {avg_text}\n"
         f"• Найчастіший день: {day_text}\n"
         f"• Пік по годинах: {hour_text}\n"
-        f"• Дані збираються автоматично ботом"
+        f"• Дані збираються автоматично"
     )
 
     await update.message.reply_text(msg, reply_markup=main_menu())
 
 
-# === ВИБІР МІСТА ===
+# === ВЫБОР ГОРОДА ===
 async def city(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[city] for city in CITIES.keys()]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -285,7 +297,7 @@ async def city_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-# === ОБРОБКА МЕНЮ ===
+# === ОБРАБОТКА МЕНЮ ===
 async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
 
