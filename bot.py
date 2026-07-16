@@ -519,3 +519,34 @@ def main():
     application.add_handler(CommandHandler("slotstats", slotstats))
     application.add_handler(CommandHandler("slotday", slotday))
     application.add_handler(CommandHandler("slothour", slothour))
+    application.add_handler(CommandHandler("lastslot", lastslot))
+    application.add_handler(CommandHandler("debug", debug))
+
+    application.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND &
+        filters.Regex(
+            "^(🔄 Статус|Статус|"
+            "🏙 Змінити місто|Змінити місто|"
+            "📊 Статистика термінів|Статистика термінів|"
+            "🕓 Останній термін|Останній термін|"
+            "⏱ Середня тривалість|Середня тривалість|"
+            "📅 Найчастіший день|Найчастіший день|"
+            "⏰ Пікова година|Пікова година|"
+            "🛠 Debug|Debug|"
+            "⛔ Зупинити моніторинг|Зупинити моніторинг|"
+            "▶️ Увімкнути моніторинг|Увімкнути моніторинг)$"
+        ),
+        menu_handler
+    ))
+
+    application.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND &
+        filters.Regex("^(Мюнхен|Берлін|Прага|Варшава)$"),
+        city_choice
+    ))
+
+    application.run_polling()
+
+
+if __name__ == "__main__":
+    main()
