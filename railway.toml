@@ -3,6 +3,4 @@ builder = "nixpacks"
 
 [build.nixpacks]
 python_version = "3.11"
-
-[deploy]
-start = "python bot.py"
+providers = ["python"]
