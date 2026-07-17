@@ -17,6 +17,7 @@ from telegram.ext import (
     filters,
 )
 from playwright.sync_api import sync_playwright
+import asyncio
 
 # === ЛОГИ ===
 logging.basicConfig(
@@ -75,7 +76,7 @@ context = None
 def init_browser():
     global playwright, browser, context
     playwright = sync_playwright().start()
-    browser = playwright.chromium.launch(headless=True)
+    browser = playwright.chromium.launch(headless=True, args=["--no-sandbox"])
     context = browser.new_context()
 
 def close_browser():
@@ -150,15 +151,8 @@ async def check_slots(context: ContextTypes.DEFAULT_TYPE) -> None:
             logging.warning(f"[{chat_id}] {city}: статус {status}, слоты считаем недоступными")
             slots_available = False
         else:
-            with open("last_page.html", "w", encoding="utf-8") as f:
-                f.write(html)
-
             soup = BeautifulSoup(html, "html.parser")
             page_text = soup.get_text(separator=" ").strip()
-
-            with open("last_text.txt", "w", encoding="utf-8") as f:
-                f.write(page_text)
-
             slots_available = "Наразі всі місця зайняті" not in page_text
 
         debug_checks.append({
@@ -228,10 +222,8 @@ async def check_slots(context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception as e:
         logging.error(f"Помилка перевірки слотів для {chat_id}/{city}: {e}")
 
-# === ВСЕ ОСТАЛЬНЫЕ КОМАНДЫ (start, stop, status, stats, slotstats, slotday, slothour, lastslot, debug, city, city_choice, menu_handler) ===
-# Они остаются без изменений — как в твоём исходном файле.
-
-def main() -> None:
+# === MAIN ===
+async def main():
     TOKEN = os.getenv("TOKEN")
     if not TOKEN:
         raise RuntimeError("Не задано TOKEN в змінних оточення.")
@@ -248,12 +240,12 @@ def main() -> None:
 
     application.post_init = _startup
 
-    # Добавляем все CommandHandler и MessageHandler как в исходном коде
+    # Добавь сюда все CommandHandler и MessageHandler
 
     try:
-        application.run_polling()
+        await application.run_polling()
     finally:
         close_browser()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
