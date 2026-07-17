@@ -17,7 +17,8 @@ TOKEN = "8713421271:AAExnQzvDRO1BBRHKTFVnpXjwfJN580xNus"
 TIMEZONE = "Europe/Kyiv"
 TZ = ZoneInfo(TIMEZONE)
 
-CITIES = ["Мюнхен", "Берлін", "Прага", "Варшава"]
+# Список доступных городов
+CITIES = ["Мюнхен", "Берлін"]
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
