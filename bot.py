@@ -4,9 +4,7 @@ import logging
 import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from playwright.async_api import async_playwright
-# Подключаем маскировку под человека
-from playwright_stealth import stealth_async
+import httpx
 
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
@@ -43,60 +41,54 @@ def get_now():
     return datetime.now(TZ)
 
 
-async def check_slots_playwright(city: str):
+async def check_slots_api(city: str):
     url = CITY_URLS.get(city)
     if not url:
         return None, f"❌ Немає сайту для {city}"
 
-    browser = None
+    # Используем продвинутые заголовки реального Chrome браузера
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Cache-Control": "max-age=0",
+        "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1"
+    }
+
     try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=[
-                    "--no-sandbox", 
-                    "--disable-dev-shm-usage",
-                    "--disable-blink-features=AutomationControlled" # Отключаем флаг автоматизации
-                ],
-            )
-            context = await browser.new_context(
-                viewport={"width": 1920, "height": 1080},
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-            )
-            page = await context.new_page()
+        # Используем клиент с автоматической поддержкой HTTP/2 (Cloudflare это любит)
+        async with httpx.AsyncClient(http2=True, timeout=15.0, follow_redirects=True) as client:
+            logger.info("Запит до сайту без Playwright для міста: %s", city)
+            response = await client.get(url, headers=headers)
             
-            # Активируем режим невидимки
-            await stealth_async(page)
+            text = response.text.lower()
 
-            logger.info("Перевірка сайту з маскуванням для міста: %s", city)
-
-            await page.goto(url, timeout=30000, wait_until="networkidle")
-            await page.wait_for_timeout(5000) # Даем время на загрузку контента
-            
-            text = (await page.inner_text("body")).lower()
-
-            if "blocked" in text or "security reasons" in text:
-                logger.warning("Бот заблокований захистом Cloudflare для міста: %s", city)
-                return None, f"🛡️ {city}: Захист сайту заблокував автоматичний запит."
+            if "blocked for security reasons" in text or response.status_code == 403:
+                logger.warning("Бот все ще заблокований Cloudflare (403/Blocked)")
+                return None, f"🛡️ {city}: Сервер хостингу заблокований захистом сайту. Потрібно змінити IP."
 
             if "наразі всі місця зайняті" in text:
                 logger.info("Термінів немає: %s", city)
                 return False, f"❌ {city}: термінів немає"
 
-            elif "продовжити" in text:
+            elif "продовжити" in text or "зареєструватися" in text:
                 logger.info("Знайдено вільні терміни: %s", city)
                 return True, f"✅ {city}: є вільні терміни!"
 
-            logger.info("Ключові слова не знайдено: %s", city)
-            return None, f"⚠️ {city}: сайт доступний, але статус незрозумілий (змінився інтерфейс)"
+            logger.info("Невідомий статус сторінки: %s", city)
+            return None, f"⚠️ {city}: сайт доступний, але відповідь нетипова."
 
     except Exception as e:
-        logger.exception("Помилка при перевірці %s", city)
-        return None, f"❌ Помилка при перевірці {city}: {e}"
-
-    finally:
-        if browser:
-            await browser.close()
+        logger.exception("Помилка запиту %s", city)
+        return None, f"❌ Помилка з'єднання: {e}"
 
 
 # ====================== МЕНЮ ======================
@@ -136,7 +128,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"📍 Місто: {context.chat_data['city']}\n"
         f"🟢 Моніторинг активний\n"
-        f"Я повідомлю, коли з’являться вільні слоти.\n"
         f"🕒 {now.strftime('%H:%M')}"
     )
     await show_main_menu(update, context)
@@ -165,8 +156,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"📍 Поточне місто: {city}")
         case "🔄 Статус":
             city = context.chat_data.get("city", "Мюнхен")
-            await update.message.reply_text("⏳ Перевіряю сайт, зачекайте кілька секунд...")
-            _, result = await check_slots_playwright(city)
+            await update.message.reply_text("⏳ Перевіряю статус через швидкий HTTP-клієнт...")
+            _, result = await check_slots_api(city)
             await update.message.reply_text(result)
         case "▶ Увімкнути моніторинг":
             context.chat_data["monitoring"] = True
@@ -176,33 +167,16 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⛔ Моніторинг зупинено")
         case "🛠 Debug":
             city = context.chat_data.get("city", "Мюнхен")
-            await update.message.reply_text("🕵️‍♂️ Зчитую поточний текст сайту для системи дебагу...")
+            await update.message.reply_text("🕵️‍♂️ Зчитую сирий HTML сторінки для аналізу...")
             try:
-                async with async_playwright() as p:
-                    browser = await p.chromium.launch(
-                        headless=True, 
-                        args=[
-                            "--no-sandbox", 
-                            "--disable-dev-shm-usage",
-                            "--disable-blink-features=AutomationControlled"
-                        ]
-                    )
-                    context_page = await browser.new_context(
-                        viewport={"width": 1920, "height": 1080},
-                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-                    )
-                    page = await context_page.new_page()
-                    await stealth_async(page)
-                    
-                    await page.goto(CITY_URLS[city], timeout=30000, wait_until="networkidle")
-                    await page.wait_for_timeout(5000)
-                    body_text = await page.inner_text("body")
-                    await browser.close()
-                    
-                    debug_slice = body_text[:600].replace('\n', ' ')
+                headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+                async with httpx.AsyncClient(http2=True, timeout=15.0) as client:
+                    resp = await client.get(CITY_URLS[city], headers=headers)
+                    clean_text = resp.text[:600].replace('\n', ' ')
                     await update.message.reply_text(
+                        f"📊 Код відповіді: {resp.status_code}\n"
                         f"📋 Конфіг: {context.chat_data}\n\n"
-                        f"📄 Текст сайту (перші 600 симв):\n\n{debug_slice}..."
+                        f"📄 Сирий текст:\n{clean_text}..."
                     )
             except Exception as e:
                 await update.message.reply_text(f"❌ Помилка дебагу: {e}")
@@ -223,15 +197,13 @@ async def monitor_job(context: ContextTypes.DEFAULT_TYPE):
     if not active_cities:
         return
 
-    logger.info(f"Запуск системного мониторинга для городов: {active_cities}")
-
-    tasks = {city: check_slots_playwright(city) for city in active_cities}
+    tasks = {city: check_slots_api(city) for city in active_cities}
     results = await asyncio.gather(*tasks.values(), return_exceptions=True)
     
     city_states = {}
     for city, res in zip(tasks.keys(), results):
         if isinstance(res, Exception):
-            city_states[city] = (None, f"❌ Системна помилка: {res}")
+            city_states[city] = (None, f"❌ Помилка: {res}")
         else:
             city_states[city] = res
 
@@ -244,7 +216,7 @@ async def monitor_job(context: ContextTypes.DEFAULT_TYPE):
                 try:
                     await application.bot.send_message(chat_id=chat_id, text=result_text)
                 except Exception as e:
-                    logger.error(f"Не удалось отправить сообщение {chat_id}: {e}")
+                    logger.error(f"Помилка відправки: {e}")
 
             if state is not None:
                 data["last_state"] = state
@@ -252,7 +224,6 @@ async def monitor_job(context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     if not TOKEN:
-        logger.error("КРИТИЧЕСКАЯ ОШИБКА: Токен не задан!")
         sys.exit(1)
 
     persistence = PicklePersistence(filepath="/app/data/bot_persistence.pickle")
@@ -261,26 +232,15 @@ def main():
         Application.builder()
         .token(TOKEN)
         .persistence(persistence)
-        .read_timeout(30)
-        .write_timeout(30)
-        .connect_timeout(30)
-        .pool_timeout(30)
         .build()
     )
 
     job_queue = application.job_queue
-    job_queue.run_repeating(
-        monitor_job,
-        interval=60,  
-        first=10,     
-        name="slots_monitoring_job"
-    )
+    job_queue.run_repeating(monitor_job, interval=60, first=10, name="slots_monitoring_job")
 
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
-    logger.info("Бот запущен | Таймзона: %s", TIMEZONE)
-    
     application.run_polling(drop_pending_updates=True)
 
 
