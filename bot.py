@@ -27,7 +27,6 @@ logger = logging.getLogger(__name__)
 # ====================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ======================
 
 def get_now():
-    """Текущее время по Киеву."""
     return datetime.now(TZ)
 
 
@@ -35,11 +34,14 @@ def get_now():
 
 def build_keyboard():
     keyboard = [
-        ["🔄 Статус", "🏙 Змінити місто"],
-        ["📊 Статистика термінів", "⏰ Останній термін"],
-        ["📈 Середня тривалість", "📅 Найчастіший день"],
-        ["🕒 Пікова година", "🛠 Debug"],
-        ["⛔ Зупинити моніторинг", "▶ Увімкнути моніторинг"],
+        ["▶ Увімкнути моніторинг", "⛔ Зупинити моніторинг"],
+        ["🏙 Змінити місто", "🔄 Статус"],
+        ["📊 Статистика термінів"],
+        ["⏰ Останній термін"],
+        ["📈 Середня тривалість"],
+        ["📅 Найчастіший день"],
+        ["🕒 Пікова година"],
+        ["🛠 Debug"],
     ]
     return ReplyKeyboardMarkup(
         keyboard,
@@ -51,8 +53,7 @@ def build_keyboard():
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     now = get_now()
     await update.message.reply_text(
-        f"Монітор вільних термінів\n"
-        f"🕒 {now.strftime('%H:%M')}",
+        f"Монітор вільних термінів\n🕒 {now.strftime('%H:%M')}",
         reply_markup=build_keyboard(),
     )
 
@@ -78,18 +79,12 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     text = update.message.text.strip()
-    text_lower = text.lower()
     now = get_now()
-
-    if text_lower in ("меню", "/menu", "start"):
-        await show_main_menu(update, context)
-        return
 
     match text:
         case "🔄 Статус":
             await update.message.reply_text(
-                f"🔴 Мюнхен — unknown state\n"
-                f"🕒 {now.strftime('%H:%M:%S')}"
+                f"🔴 Мюнхен — unknown state\n🕒 {now.strftime('%H:%M:%S')}"
             )
         case "▶ Увімкнути моніторинг":
             await update.message.reply_text("✅ Моніторинг активований")
