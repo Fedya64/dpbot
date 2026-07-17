@@ -5,7 +5,7 @@ import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-# Импортируем curl_cffi вместо httpx
+# Используем curl_cffi вместо httpx для обхода TLS-fingerprint защиты
 from curl_cffi import requests
 
 from telegram import Update, ReplyKeyboardMarkup
@@ -58,19 +58,30 @@ async def check_slots_api(city: str):
         "Upgrade-Insecure-Requests": "1"
     }
 
+    # НАСТРОЙКА ПРОКСИ: Замени ТВОЙ_ПРОКСИ_ТУТ на реальные данные прокси.
+    # Пример формата: "http://user:password@1.2.3.4:8080"
+    proxies = {
+        "http": "http://ТВОЙ_ПРОКСИ_ТУТ",
+        "https": "http://ТВОЙ_ПРОКСИ_ТУТ"
+    }
+    
+    # Если прокси ещё не куплены, временно закомментируй строку ниже (убери знак #), 
+    # но помни, что без прокси Cloudflare будет блокировать IP хостинга.
+    # proxies = None
+
     try:
-        # Открываем асинхронную сессию curl_cffi
-        async with requests.AsyncSession() as session:
+        # Открываем асинхронную сессию curl_cffi с поддержкой прокси
+        async with requests.AsyncSession(proxies=proxies) as session:
             logger.info("Запит через curl_cffi (impersonate='chrome') для міста: %s", city)
             
-            # impersonate="chrome" заставляет curl_cffi подделывать TLS-отпечаток
+            # impersonate="chrome" полностью копирует сетевой уровень браузера Google Chrome
             response = await session.get(url, headers=headers, impersonate="chrome", timeout=15.0)
             
             text = response.text.lower()
 
             if "blocked for security reasons" in text or response.status_code == 403:
-                logger.warning("Бот все ще заблокований захистом (403/Blocked)")
-                return None, f"🛡️ {city}: Сервер хостингу заблокований захистом сайту. Спробуйте інший регіон хостингу."
+                logger.warning("Бот заблокований захистом Cloudflare (403/Blocked)")
+                return None, f"🛡️ {city}: Сервер хостингу заблокований захистом сайту. Потрібно підключити або змінити прокси."
 
             if "наразі всі місця зайняті" in text:
                 logger.info("Термінів немає: %s", city)
