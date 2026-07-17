@@ -17,7 +17,7 @@ CITIES = {
 
 CITY_EMOJI = {"Мюнхен": "🟢", "Берлін": "🔵", "Прага": "🟣", "Варшава": "🟠"}
 
-CHECK_INTERVAL = 45
+CHECK_INTERVAL = 60  # перевірка кожну 1 хвилину
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 
@@ -105,29 +105,29 @@ async def check_slots(context: ContextTypes.DEFAULT_TYPE):
             await page.goto(url, wait_until="networkidle", timeout=45000)
             content = (await page.content()).lower()
 
-            # === ФІНАЛЬНА ЛОГІКА НА ОСНОВІ ТВОЇХ СКРІНШОТІВ ===
+            # === ЛОГІКА ПЕРЕВІРКИ ===
             busy_message = "наразі всі місця зайняті" in content
-            has_continue_button = "продовжити" in content
-            has_form = "прізвище" in content and "номер телефону" in content
+            has_form = "продовжити" in content and "прізвище" in content
 
-            slots_available = (has_continue_button or has_form) and not busy_message
+            slots_available = has_form and not busy_message
 
         finally:
             await page.close()
 
         # Debug
+        reason = "busy message" if busy_message else ("form detected" if has_form else "unknown state")
         debug_checks.append({
             "time": datetime.now().strftime("%H:%M:%S"),
             "city": city,
             "available": slots_available,
-            "reason": "busy message" if busy_message else "form detected"
+            "reason": reason
         })
         if len(debug_checks) > 15:
             debug_checks.pop(0)
 
         key = (chat_id, city)
 
-        # Перший запуск — тільки запам'ятовуємо
+        # Перший запуск
         if key not in last_status:
             last_status[key] = slots_available
             return
@@ -193,7 +193,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         check_slots, interval=CHECK_INTERVAL, first=10, chat_id=chat_id, name=str(chat_id)
     )
 
-    await update.message.reply_text("✅ Моніторинг запущено!", reply_markup=main_menu())
+    await update.message.reply_text("✅ Моніторинг запущено! Перевірка кожну хвилину.", reply_markup=main_menu())
 
 
 async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -226,7 +226,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if old_city:
             last_status.pop((chat_id, old_city), None)
         user_city[chat_id] = text
-        last_status[(chat_id, text)] = None
+        last_status[(chat_id, text)] = False
         await update.message.reply_text(f"✅ Місто змінено на: <b>{text}</b>", parse_mode='HTML', reply_markup=main_menu())
 
     elif text == "📊 Статистика":
@@ -274,7 +274,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu_handler))
 
-    print("Бот запущений...")
+    print("Бот запущений... Перевірка кожну хвилину.")
     app.run_polling()
 
 
