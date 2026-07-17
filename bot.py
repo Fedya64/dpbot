@@ -58,16 +58,11 @@ async def check_slots_api(city: str):
         "Upgrade-Insecure-Requests": "1"
     }
 
-    # НАСТРОЙКА ПРОКСИ: Замени ТВОЙ_ПРОКСИ_ТУТ на реальные данные прокси.
-    # Пример формата: "http://user:password@1.2.3.4:8080"
+    # НАСТРОЙКА ПРОКСИ: Твой рабочий прокси без авторизации
     proxies = {
-        "http": "http://ТВОЙ_ПРОКСИ_ТУТ",
-        "https": "http://ТВОЙ_ПРОКСИ_ТУТ"
+        "http": "http://162.243.108.161:8080",
+        "https": "http://162.243.108.161:8080"
     }
-    
-    # Если прокси ещё не куплены, временно закомментируй строку ниже (убери знак #), 
-    # но помни, что без прокси Cloudflare будет блокировать IP хостинга.
-    # proxies = None
 
     try:
         # Открываем асинхронную сессию curl_cffi с поддержкой прокси
@@ -178,7 +173,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("🕵️‍♂️ Зчитую сирий HTML сторінки за допомогою curl_cffi...")
             try:
                 headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-                async with requests.AsyncSession() as session:
+                proxies = {
+                    "http": "http://162.243.108.161:8080",
+                    "https": "http://162.243.108.161:8080"
+                }
+                async with requests.AsyncSession(proxies=proxies) as session:
                     resp = await session.get(CITY_URLS[city], headers=headers, impersonate="chrome", timeout=15.0)
                     clean_text = resp.text[:600].replace('\n', ' ')
                     await update.message.reply_text(
