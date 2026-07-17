@@ -1,7 +1,9 @@
+import os
+import sys
 import logging
+import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from playwright.async_api import async_playwright
 
 from telegram import Update, ReplyKeyboardMarkup
@@ -11,11 +13,14 @@ from telegram.ext import (
     MessageHandler,
     ContextTypes,
     filters,
+    PicklePersistence,
 )
 
 # ====================== НАСТРОЙКИ ======================
 
-TOKEN = "8713421271:AAExnQzvDRO1BBRHKTFVnpXjwfJN580xNus"
+# Безопасно берем токен из переменных окружения хостинга
+TOKEN = os.getenv("TELEGRAM_TOKEN", "8713421271:AAExnQzvDRO1BBRHKTFVnpXjwfJN580xNus")
+
 TIMEZONE = "Europe/Kyiv"
 TZ = ZoneInfo(TIMEZONE)
 
@@ -57,9 +62,13 @@ async def check_slots_playwright(city: str):
                 )
             )
 
-            logger.info("Перевірка %s", city)
+            logger.info("Перевірка сайту для міста: %s", city)
 
-            await page.goto(url, timeout=30000, wait_until="networkidle")
+            # Таймаут 30 сек на загрузку, ждем базовой загрузки DOM
+            await page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            # Даем скриптам страницы 3 секунды догрузиться
+            await page.wait_for_timeout(3000)
+            
             text = (await page.inner_text("body")).lower()
 
             if "наразі всі місця зайняті" in text:
@@ -71,11 +80,11 @@ async def check_slots_playwright(city: str):
                 return True, f"✅ {city}: є вільні терміни!"
 
             logger.info("Ключові слова не знайдено: %s", city)
-            return None, f"⚠️ {city}: сайт доступний, але ключові слова не знайдено"
+            return None, f"⚠️ {city}: сайт доступний, але статус незрозумілий (змінився інтерфейс)"
 
     except Exception as e:
         logger.exception("Помилка при перевірці %s", city)
-        return None, f"❌ Помилка при перевірці: {e}"
+        return None, f"❌ Помилка при перевірці {city}: {e}"
 
     finally:
         if browser:
@@ -111,9 +120,12 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     now = get_now()
-    context.chat_data["city"] = "Мюнхен"
+    # Инициализируем дефолтные настройки, если юзер новый
+    if "city" not in context.chat_data:
+        context.chat_data["city"] = "Мюнхен"
     context.chat_data["monitoring"] = True
     context.chat_data["last_state"] = False
+    
     await update.message.reply_text(
         f"📍 Місто: {context.chat_data['city']}\n"
         f"🟢 Моніторинг активний\n"
@@ -146,6 +158,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"📍 Поточне місто: {city}")
         case "🔄 Статус":
             city = context.chat_data.get("city", "Мюнхен")
+            await update.message.reply_text("⏳ Перевіряю сайт, зачекайте кілька секунд...")
             _, result = await check_slots_playwright(city)
             await update.message.reply_text(result)
         case "▶ Увімкнути моніторинг":
@@ -160,38 +173,89 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Невідома команда. Натисніть кнопку.")
 
 
-# ====================== АВТОМАТИЧНИЙ МОНІТОРИНГ ======================
+# ====================== ОПТИМИЗИРОВАННЫЙ МОНИТОРИНГ ======================
 
-async def monitor_job(application: Application):
+async def monitor_job(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Проверяет каждый город ровно 1 раз параллельно, 
+    после чего рассылает результаты нужным пользователям.
+    """
+    application = context.application
+    active_cities = set()
+
+    # Собираем только те города, которые сейчас реально кто-то мониторит
+    for chat_id, data in application.chat_data.items():
+        if data.get("monitoring", False):
+            active_cities.add(data.get("city", "Мюнхен"))
+
+    if not active_cities:
+        return
+
+    logger.info(f"Запуск системного мониторинга для городов: {active_cities}")
+
+    # Запускаем проверку всех необходимых городов параллельно
+    tasks = {city: check_slots_playwright(city) for city in active_cities}
+    results = await asyncio.gather(*tasks.values(), return_exceptions=True)
+    
+    # Сопоставляем результаты с городами
+    city_states = {}
+    for city, res in zip(tasks.keys(), results):
+        if isinstance(res, Exception):
+            city_states[city] = (None, f"❌ Системна помилка: {res}")
+        else:
+            city_states[city] = res  # (state, result_text)
+
+    # Рассылаем уведомления пользователям на основе общего пула результатов
     for chat_id, data in application.chat_data.items():
         if data.get("monitoring", False):
             city = data.get("city", "Мюнхен")
-            state, result = await check_slots_playwright(city)
-            if state and not data.get("last_state", False):
-                await application.bot.send_message(chat_id=chat_id, text=result)
-            # обновляем только если состояние определено
+            state, result_text = city_states.get(city, (None, None))
+
+            if state is True and not data.get("last_state", False):
+                try:
+                    await application.bot.send_message(chat_id=chat_id, text=result_text)
+                except Exception as e:
+                    logger.error(f"Не удалось отправить сообщение {chat_id}: {e}")
+
             if state is not None:
                 data["last_state"] = state
 
 
 def main():
-    application = Application.builder().token(TOKEN).build()
+    if not TOKEN:
+        logger.error("КРИТИЧЕСКАЯ ОШИБКА: Переменная TELEGRAM_TOKEN не задана!")
+        sys.exit(1)
 
-    scheduler = AsyncIOScheduler(timezone=TIMEZONE)
-    scheduler.add_job(
-        monitor_job,
-        trigger="interval",
-        minutes=1,
-        args=[application],
-        max_instances=1,
-        coalesce=True,
+    # Настраиваем сохранение данных в файл
+    persistence = PicklePersistence(filepath="/app/data/bot_persistence.pickle")
+
+    # Инициализируем приложение со встроенным JobQueue и расширенными таймаутами
+    application = (
+        Application.builder()
+        .token(TOKEN)
+        .persistence(persistence)
+        .read_timeout(30)
+        .write_timeout(30)
+        .connect_timeout(30)
+        .pool_timeout(30)
+        .build()
     )
-    scheduler.start()
+
+    # Используем встроенный в библиотеку JobQueue вместо внешнего планировщика APScheduler.
+    # Это гарантирует идеальную синхронизацию с контекстом бота без конфликта потоков.
+    job_queue = application.job_queue
+    job_queue.run_interval(
+        monitor_job,
+        interval=60, # Каждую минуту
+        first=10,    # Первый запуск через 10 секунд после старта
+    )
 
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
     logger.info("Бот запущен | Таймзона: %s", TIMEZONE)
+    
+    # drop_pending_updates=True спасет от спама старых команд при перезапуске контейнера
     application.run_polling(drop_pending_updates=True)
 
 
