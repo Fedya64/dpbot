@@ -15,7 +15,9 @@ from telegram.ext import (
 
 # ====================== НАСТРОЙКИ ======================
 TOKEN = "8713421271:AAExnQzvDRO1BBRHKTFVnpXjwfJN580xNus"
-TIMEZONE = "Europe/Kiev"
+
+# Правильна назва часової зони
+TIMEZONE = "Europe/Kyiv"   # ← Важливо! Kyiv, а не Kiev
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -42,7 +44,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await show_main_menu(update, context)
         else:
             now = get_now()
-            await update.message.reply_text(f"🕒 {now.strftime('%H:%M')}")
+            await update.message.reply_text(f"🕒 {now.strftime('%H:%M')}\nНапиши 'меню'")
 
 
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
