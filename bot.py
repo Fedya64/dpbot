@@ -18,8 +18,8 @@ from telegram.ext import (
 
 # ====================== НАСТРОЙКИ ======================
 
-# Безопасно берем токен из переменных окружения хостинга
-TOKEN = os.getenv("TELEGRAM_TOKEN", "8713421271:AAExnQzvDRO1BBRHKTFVnpXjwfJN580xNus")
+# Токен вшит жестко, как вы и просили
+TOKEN = "8713421271:AAExnQzvDRO1BBRHKTFVnpXjwfJN580xNus"
 
 TIMEZONE = "Europe/Kyiv"
 TZ = ZoneInfo(TIMEZONE)
@@ -223,7 +223,7 @@ async def monitor_job(context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     if not TOKEN:
-        logger.error("КРИТИЧЕСКАЯ ОШИБКА: Переменная TELEGRAM_TOKEN не задана!")
+        logger.error("КРИТИЧЕСКАЯ ОШИБКА: Токен не задан!")
         sys.exit(1)
 
     # Настраиваем сохранение данных в файл
@@ -241,12 +241,11 @@ def main():
         .build()
     )
 
-    # Используем встроенный в библиотеку JobQueue вместо внешнего планировщика APScheduler.
-    # Это гарантирует идеальную синхронизацию с контекстом бота без конфликта потоков.
+    # Используем встроенный в библиотеку JobQueue
     job_queue = application.job_queue
     job_queue.run_interval(
         monitor_job,
-        interval=60, # Каждую минуту
+        interval=60, # Проверка каждую минуту
         first=10,    # Первый запуск через 10 секунд после старта
     )
 
@@ -255,7 +254,7 @@ def main():
 
     logger.info("Бот запущен | Таймзона: %s", TIMEZONE)
     
-    # drop_pending_updates=True спасет от спама старых команд при перезапуске контейнера
+    # Очищаем старые обновления, чтобы избежать конфликтов при старте
     application.run_polling(drop_pending_updates=True)
 
 
