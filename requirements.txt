@@ -2,3 +2,4 @@ python-telegram-bot[job-queue]==20.7
 beautifulsoup4
 playwright==1.54.0
 tzdata
+patched-playwright-stealth==0.1.2
