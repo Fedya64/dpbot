@@ -1,7 +1,7 @@
 import logging
 import asyncio
 from datetime import datetime
-from zoneinfo import ZoneInfo   # Рекомендуемый способ в Python 3.9+
+from zoneinfo import ZoneInfo
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -16,11 +16,8 @@ from telegram.ext import (
 # ====================== НАСТРОЙКИ ======================
 TOKEN = "8713421271:AAExnQzvDRO1BBRHKTFVnpXjwfJN580xNus"
 
-# ←←← УКАЖИ СВОЮ ВРЕМЕННУЮ ЗОНУ
-TIMEZONE = "Europe/Kiev"        # Для Украины
-# TIMEZONE = "Europe/Warsaw"    # Для Польши
-# TIMEZONE = "Europe/Berlin"    # Для Германии
-# TIMEZONE = "Europe/Moscow"    # Для Москвы
+# Укажи свою временную зону
+TIMEZONE = "Europe/Kiev"      # Основные варианты: Europe/Kiev, Europe/Warsaw, Europe/Berlin, Europe/Moscow
 
 # Логирование
 logging.basicConfig(
@@ -31,25 +28,26 @@ logger = logging.getLogger(__name__)
 
 
 def get_now():
-    """Возвращает текущее время в правильной зоне"""
+    """Возвращает текущее время в выбранной временной зоне"""
     return datetime.now(ZoneInfo(TIMEZONE))
 
 
 # ====================== ХЕНДЛЕРЫ ======================
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message is None:
+    if not update.message:
         return
+    
     now = get_now()
     await update.message.reply_text(
-        f"👋 Привет! Я готов.\n"
-        f"Текущее время: {now.strftime('%H:%M')}\n"
-        f"Напиши /menu"
+        f"👋 Привет! Бот успешно запущен.\n"
+        f"🕒 Текущее время: {now.strftime('%H:%M')}"
     )
 
 
 async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message is None or update.message.text is None:
+    """Обработчик текстовых сообщений"""
+    if not update.message or not update.message.text:
         return
 
     text = update.message.text.strip().lower()
@@ -58,10 +56,11 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_main_menu(update, context)
     else:
         now = get_now()
-        await update.message.reply_text(f"Текущее время: {now.strftime('%H:%M')}\nИспользуй /menu")
+        await update.message.reply_text(f"🕒 Сейчас: {now.strftime('%H:%M')}\nНапиши «меню»")
 
 
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Главное меню"""
     keyboard = [
         [InlineKeyboardButton("🔥 Авантюрное наслаждение", callback_data="aventura")],
         [InlineKeyboardButton("🍀 Плодотворная удача", callback_data="luck")],
@@ -71,40 +70,47 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     now = get_now()
-    text = f"Выберите действие:\n🕒 Сейчас: {now.strftime('%H:%M')}"
-
-    if update.message:
-        await update.message.reply_text(text, reply_markup=reply_markup)
-    elif update.callback_query:
-        await update.callback_query.message.edit_text(text, reply_markup=reply_markup)
+    await update.message.reply_text(
+        f"Выберите режим:\n🕒 {now.strftime('%H:%M')}", 
+        reply_markup=reply_markup
+    )
 
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка нажатий на кнопки"""
     query = update.callback_query
     await query.answer()
 
     now = get_now()
 
     if query.data == "aventura":
-        await query.message.reply_text(f"🎲 Авантюрное наслаждение активировано!\n🕒 {now.strftime('%H:%M')}")
+        await query.message.reply_text(
+            f"🎲 Режим 'Авантюрное наслаждение' активирован!\n"
+            f"🕒 {now.strftime('%H:%M')}"
+        )
     elif query.data == "luck":
-        await query.message.reply_text(f"🍀 Плодотворная удача активирована!\n🕒 {now.strftime('%H:%M')}")
+        await query.message.reply_text(
+            f"🍀 Режим 'Плодотворная удача' активирован!\n"
+            f"🕒 {now.strftime('%H:%M')}"
+        )
+    elif query.data == "settings":
+        await query.message.reply_text("⚙️ Настройки пока в разработке.")
     elif query.data == "info":
-        await query.message.reply_text(f"🕒 Текущее время: {now.strftime('%Y-%m-%d %H:%M:%S')}")
+        await query.message.reply_text(
+            f"🕒 Текущее время: {now.strftime('%Y-%m-%d %H:%M:%S')}"
+        )
 
 
-# ====================== ЗАПУСК ======================
+# ====================== ЗАПУСК БОТА ======================
 async def main():
     application = Application.builder().token(TOKEN).build()
 
+    # Хендлеры
     application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("menu", menu_handler))
-    application.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, menu_handler)
-    )
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu_handler))
     application.add_handler(CallbackQueryHandler(button_handler))
 
-    logger.info(f"Бот запущен. Таймзона: {TIMEZONE}")
+    logger.info(f"Бот успешно запущен | Таймзона: {TIMEZONE}")
     await application.run_polling(drop_pending_updates=True)
 
 
