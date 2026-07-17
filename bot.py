@@ -1,5 +1,4 @@
 import logging
-import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -16,18 +15,21 @@ from telegram.ext import (
 # ====================== НАСТРОЙКИ ======================
 TOKEN = "8713421271:AAExnQzvDRO1BBRHKTFVnpXjwfJN580xNus"
 
-# Правильна назва часової зони
-TIMEZONE = "Europe/Kyiv"   # ← Важливо! Kyiv, а не Kiev
+# Таймзона
+TIMEZONE = "Europe/Kyiv"   # Kyiv, а не Kiev
 
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
 
 def get_now():
-    return datetime.now(ZoneInfo(TIMEZONE))
+    try:
+        return datetime.now(ZoneInfo(TIMEZONE))
+    except Exception:
+        return datetime.utcnow()
 
 
 # ====================== ХЕНДЛЕРЫ ======================
@@ -64,7 +66,7 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     now = get_now()
     await update.message.reply_text(
-        f"Монітор вільних термінів\n🕒 {now.strftime('%H:%M')}", 
+        f"Монітор вільних термінів\n🕒 {now.strftime('%H:%M')}",
         reply_markup=reply_markup
     )
 
@@ -87,7 +89,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ====================== ЗАПУСК ======================
-async def main():
+def main():
     application = Application.builder().token(TOKEN).build()
 
     application.add_handler(CommandHandler("start", start_command))
@@ -95,8 +97,8 @@ async def main():
     application.add_handler(CallbackQueryHandler(button_handler))
 
     logger.info(f"Бот запущен | Таймзона: {TIMEZONE}")
-    await application.run_polling(drop_pending_updates=True)
+    application.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
