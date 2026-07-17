@@ -16,7 +16,7 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-from playwright.sync_api import sync_playwright
+from playwright.async_api import async_playwright
 import asyncio
 
 # === ЛОГИ ===
@@ -73,40 +73,40 @@ playwright = None
 browser = None
 context = None
 
-def init_browser():
+async def init_browser():
     global playwright, browser, context
-    playwright = sync_playwright().start()
-    browser = playwright.chromium.launch(headless=True, args=["--no-sandbox"])
-    context = browser.new_context()
+    playwright = await async_playwright().start()
+    browser = await playwright.chromium.launch(headless=True, args=["--no-sandbox"])
+    context = await browser.new_context()
 
-def close_browser():
+async def close_browser():
     global playwright, browser, context
     if context:
-        context.close()
+        await context.close()
     if browser:
-        browser.close()
+        await browser.close()
     if playwright:
-        playwright.stop()
+        await playwright.stop()
 
-def fetch_page(url: str) -> tuple[str, int]:
+async def fetch_page(url: str) -> tuple[str, int]:
     global context
-    page = context.new_page()
+    page = await context.new_page()
     try:
-        response = page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        response = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
         status = response.status if response else None
         if status != 200:
             logging.warning(f"HTTP {status} для {url}")
             return "", status
 
         try:
-            page.wait_for_load_state("networkidle", timeout=5000)
+            await page.wait_for_load_state("networkidle", timeout=5000)
         except Exception:
             logging.info("networkidle не наступил, продолжаем")
 
-        title = page.title()
+        title = await page.title()
         logging.info(f"Title: {title}")
 
-        html = page.content()
+        html = await page.content()
 
         low_html = html.lower()
         if "cloudflare" in low_html:
@@ -118,7 +118,7 @@ def fetch_page(url: str) -> tuple[str, int]:
 
         return html, status
     finally:
-        page.close()
+        await page.close()
 
 # === МЕНЮ ===
 def main_menu() -> ReplyKeyboardMarkup:
@@ -145,7 +145,7 @@ async def check_slots(context: ContextTypes.DEFAULT_TYPE) -> None:
     emoji = CITY_EMOJI[city]
 
     try:
-        html, status = fetch_page(url)
+        html, status = await fetch_page(url)
 
         if not html or status != 200:
             logging.warning(f"[{chat_id}] {city}: статус {status}, слоты считаем недоступными")
@@ -229,7 +229,7 @@ async def main():
         raise RuntimeError("Не задано TOKEN в змінних оточення.")
 
     init_db()
-    init_browser()
+    await init_browser()
 
     application = ApplicationBuilder().token(TOKEN).build()
 
@@ -240,12 +240,10 @@ async def main():
 
     application.post_init = _startup
 
-    # Добавь сюда все CommandHandler и MessageHandler
-
     try:
         await application.run_polling()
     finally:
-        close_browser()
+        await close_browser()
 
 if __name__ == "__main__":
     asyncio.run(main())
