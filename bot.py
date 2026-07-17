@@ -164,18 +164,41 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.chat_data["monitoring"] = False
             await update.message.reply_text("⛔ Моніторинг зупинено")
         case "🛠 Debug":
-            await update.message.reply_text("Debug info: chat_data=" + str(context.chat_data))
+            city = context.chat_data.get("city", "Мюнхен")
+            await update.message.reply_text("🕵️‍♂️ Зчитую поточний текст сайту для системи дебагу...")
+            try:
+                async with async_playwright() as p:
+                    browser = await p.chromium.launch(
+                        headless=True, 
+                        args=["--no-sandbox", "--disable-dev-shm-usage"]
+                    )
+                    page = await browser.new_page(
+                        user_agent=(
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/138.0.0.0 Safari/537.36"
+                        )
+                    )
+                    await page.goto(CITY_URLS[city], timeout=30000, wait_until="domcontentloaded")
+                    await page.wait_for_timeout(3000)
+                    body_text = await page.inner_text("body")
+                    await browser.close()
+                    
+                    # Отправляем кусок текста, который получил робот
+                    debug_slice = body_text[:600].replace('\n', ' ')
+                    await update.message.reply_text(
+                        f"📋 Конфіг: {context.chat_data}\n\n"
+                        f"📄 Текст сайту (перші 600 симв):\n\n{debug_slice}..."
+                    )
+            except Exception as e:
+                await update.message.reply_text(f"❌ Помилка дебагу: {e}")
         case _:
             await update.message.reply_text("Невідома команда. Натисніть кнопку.")
 
 
-# ====================== ОПТИМИЗИРОВАННЫЙ МОНИТОРИНГ ======================
+# ====================== СИСТЕМНЫЙ МОНИТОРИНГ ======================
 
 async def monitor_job(context: ContextTypes.DEFAULT_TYPE):
-    """
-    Проверяет каждый город ровно 1 раз параллельно, 
-    после чего рассылает результаты нужным пользователям.
-    """
     application = context.application
     active_cities = set()
 
@@ -231,12 +254,12 @@ def main():
         .build()
     )
 
-    # Используем стабильный и нативный метод .run_repeating() у встроенного job_queue
+    # Стабильная регистрация фоновой задачи
     job_queue = application.job_queue
     job_queue.run_repeating(
         monitor_job,
-        interval=60,  # Каждые 60 секунд
-        first=10,     # Первый запуск через 10 секунд
+        interval=60,  
+        first=10,     
         name="slots_monitoring_job"
     )
 
