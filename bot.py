@@ -18,7 +18,6 @@ from telegram.ext import (
 
 # ====================== НАСТРОЙКИ ======================
 
-# Токен вшит жестко, как вы и просили
 TOKEN = "8713421271:AAExnQzvDRO1BBRHKTFVnpXjwfJN580xNus"
 
 TIMEZONE = "Europe/Kyiv"
@@ -64,9 +63,7 @@ async def check_slots_playwright(city: str):
 
             logger.info("Перевірка сайту для міста: %s", city)
 
-            # Таймаут 30 сек на загрузку, ждем базовой загрузки DOM
             await page.goto(url, timeout=30000, wait_until="domcontentloaded")
-            # Даем скриптам страницы 3 секунды догрузиться
             await page.wait_for_timeout(3000)
             
             text = (await page.inner_text("body")).lower()
@@ -120,7 +117,6 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     now = get_now()
-    # Инициализируем дефолтные настройки, если юзер новый
     if "city" not in context.chat_data:
         context.chat_data["city"] = "Мюнхен"
     context.chat_data["monitoring"] = True
@@ -175,14 +171,14 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ====================== ОПТИМИЗИРОВАННЫЙ МОНИТОРИНГ ======================
 
-async def monitor_job(application: Application):
+async def monitor_job(context: ContextTypes.DEFAULT_TYPE):
     """
     Проверяет каждый город ровно 1 раз параллельно, 
     после чего рассылает результаты нужным пользователям.
     """
+    application = context.application
     active_cities = set()
 
-    # Собираем только те города, которые сейчас реально кто-то мониторит
     for chat_id, data in application.chat_data.items():
         if data.get("monitoring", False):
             active_cities.add(data.get("city", "Мюнхен"))
@@ -192,19 +188,16 @@ async def monitor_job(application: Application):
 
     logger.info(f"Запуск системного мониторинга для городов: {active_cities}")
 
-    # Запускаем проверку всех необходимых городов параллельно
     tasks = {city: check_slots_playwright(city) for city in active_cities}
     results = await asyncio.gather(*tasks.values(), return_exceptions=True)
     
-    # Сопоставляем результаты с городами
     city_states = {}
     for city, res in zip(tasks.keys(), results):
         if isinstance(res, Exception):
             city_states[city] = (None, f"❌ Системна помилка: {res}")
         else:
-            city_states[city] = res  # (state, result_text)
+            city_states[city] = res
 
-    # Рассылаем уведомления пользователям на основе общего пула результатов
     for chat_id, data in application.chat_data.items():
         if data.get("monitoring", False):
             city = data.get("city", "Мюнхен")
@@ -225,10 +218,8 @@ def main():
         logger.error("КРИТИЧЕСКАЯ ОШИБКА: Токен не задан!")
         sys.exit(1)
 
-    # Настраиваем сохранение данных в файл
     persistence = PicklePersistence(filepath="/app/data/bot_persistence.pickle")
 
-    # Инициализируем приложение со встроенным JobQueue и расширенными таймаутами
     application = (
         Application.builder()
         .token(TOKEN)
@@ -240,16 +231,13 @@ def main():
         .build()
     )
 
-    # Настраиваем планировщик задач встроенного JobQueue через подсистему APScheduler
+    # Используем стабильный и нативный метод .run_repeating() у встроенного job_queue
     job_queue = application.job_queue
-    job_queue.scheduler.add_job(
+    job_queue.run_repeating(
         monitor_job,
-        trigger="interval",
-        seconds=60,         # Проверка каждую минуту
-        args=[application], # Передаем объект приложения напрямую в monitor_job
-        id="slots_monitoring_job",
-        max_instances=1,
-        coalesce=True
+        interval=60,  # Каждые 60 секунд
+        first=10,     # Первый запуск через 10 секунд
+        name="slots_monitoring_job"
     )
 
     application.add_handler(CommandHandler("start", start_command))
@@ -257,7 +245,6 @@ def main():
 
     logger.info("Бот запущен | Таймзона: %s", TIMEZONE)
     
-    # Очищаем старые обновления, чтобы избежать конфликтов при старте
     application.run_polling(drop_pending_updates=True)
 
 
