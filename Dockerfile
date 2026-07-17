@@ -1,6 +1,7 @@
 import logging
 import asyncio
 from datetime import datetime
+from zoneinfo import ZoneInfo   # Рекомендуемый способ в Python 3.9+
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -13,7 +14,13 @@ from telegram.ext import (
 )
 
 # ====================== НАСТРОЙКИ ======================
-TOKEN = "8713421271:AAExnQzvDRO1BBRHKTFVnpXjwfJN580xNus"   # Твой токен
+TOKEN = "8713421271:AAExnQzvDRO1BBRHKTFVnpXjwfJN580xNus"
+
+# ←←← УКАЖИ СВОЮ ВРЕМЕННУЮ ЗОНУ
+TIMEZONE = "Europe/Kiev"        # Для Украины
+# TIMEZONE = "Europe/Warsaw"    # Для Польши
+# TIMEZONE = "Europe/Berlin"    # Для Германии
+# TIMEZONE = "Europe/Moscow"    # Для Москвы
 
 # Логирование
 logging.basicConfig(
@@ -22,21 +29,26 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+def get_now():
+    """Возвращает текущее время в правильной зоне"""
+    return datetime.now(ZoneInfo(TIMEZONE))
+
+
 # ====================== ХЕНДЛЕРЫ ======================
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message is None:
         return
-    
+    now = get_now()
     await update.message.reply_text(
-        "👋 Привет! Я готов к работе.\n"
-        "Напиши /menu или просто «меню», чтобы открыть главное меню."
+        f"👋 Привет! Я готов.\n"
+        f"Текущее время: {now.strftime('%H:%M')}\n"
+        f"Напиши /menu"
     )
 
 
 async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Главный обработчик текстовых сообщений"""
-    # ЗАЩИТА ОТ ОШИБКИ, КОТОРАЯ БЫЛА В ЛОГАХ
     if update.message is None or update.message.text is None:
         return
 
@@ -45,11 +57,11 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text in ["меню", "menu", "/menu", "start"]:
         await show_main_menu(update, context)
     else:
-        await update.message.reply_text("Используй команду /menu")
+        now = get_now()
+        await update.message.reply_text(f"Текущее время: {now.strftime('%H:%M')}\nИспользуй /menu")
 
 
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает главное меню с кнопками"""
     keyboard = [
         [InlineKeyboardButton("🔥 Авантюрное наслаждение", callback_data="aventura")],
         [InlineKeyboardButton("🍀 Плодотворная удача", callback_data="luck")],
@@ -58,55 +70,43 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
+    now = get_now()
+    text = f"Выберите действие:\n🕒 Сейчас: {now.strftime('%H:%M')}"
+
     if update.message:
-        await update.message.reply_text("Выберите действие:", reply_markup=reply_markup)
+        await update.message.reply_text(text, reply_markup=reply_markup)
     elif update.callback_query:
-        await update.callback_query.message.edit_text("Выберите действие:", reply_markup=reply_markup)
+        await update.callback_query.message.edit_text(text, reply_markup=reply_markup)
 
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка нажатий на inline-кнопки"""
     query = update.callback_query
-    await query.answer()  # убираем "часики" у кнопки
+    await query.answer()
+
+    now = get_now()
 
     if query.data == "aventura":
-        await query.message.reply_text("🎲 Режим 'Авантюрное наслаждение' активирован!")
+        await query.message.reply_text(f"🎲 Авантюрное наслаждение активировано!\n🕒 {now.strftime('%H:%M')}")
     elif query.data == "luck":
-        await query.message.reply_text("🍀 Режим 'Плодотворная удача' активирован!")
-    elif query.data == "settings":
-        await query.message.reply_text("⚙️ Настройки пока в разработке.")
+        await query.message.reply_text(f"🍀 Плодотворная удача активирована!\n🕒 {now.strftime('%H:%M')}")
     elif query.data == "info":
-        await query.message.reply_text(f"🕒 Текущее время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        await query.message.reply_text(f"🕒 Текущее время: {now.strftime('%Y-%m-%d %H:%M:%S')}")
 
 
-# ====================== ОСНОВНАЯ ФУНКЦИЯ ======================
+# ====================== ЗАПУСК ======================
 async def main():
     application = Application.builder().token(TOKEN).build()
 
-    # Команды
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("menu", menu_handler))
-
-    # Текстовые сообщения
     application.add_handler(
-        MessageHandler(
-            filters.TEXT & ~filters.COMMAND, 
-            menu_handler
-        )
+        MessageHandler(filters.TEXT & ~filters.COMMAND, menu_handler)
     )
-
-    # Кнопки
     application.add_handler(CallbackQueryHandler(button_handler))
 
-    # Запуск бота
-    logger.info("Бот запущен...")
+    logger.info(f"Бот запущен. Таймзона: {TIMEZONE}")
     await application.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Бот остановлен вручную")
-    except Exception as e:
-        logger.error(f"Критическая ошибка: {e}")
+    asyncio.run(main())
