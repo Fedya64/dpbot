@@ -1,3 +1,19 @@
+import subprocess
+import sys
+
+# Принудительная установка httpx прямо при запуске скрипта
+try:
+    import httpx
+except ImportError:
+    print("httpx не найден, устанавливаю...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "httpx[http2]==0.27.0"])
+    import httpx
+
+# Дальше идет твой обычный код бота...
+import os
+import logging
+import asyncio
+# ... (весь остальной код, который я давал выше)
 import os
 import sys
 import logging
