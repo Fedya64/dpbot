@@ -169,7 +169,9 @@ async def monitor_job(application: Application):
             state, result = await check_slots_playwright(city)
             if state and not data.get("last_state", False):
                 await application.bot.send_message(chat_id=chat_id, text=result)
-            data["last_state"] = state
+            # обновляем только если состояние определено
+            if state is not None:
+                data["last_state"] = state
 
 
 def main():
