@@ -1,5 +1,3 @@
-python-telegram-bot[job-queue]==20.7
-beautifulsoup4
-playwright==1.54.0
-tzdata
-patched-playwright-stealth==0.1.2
+python-telegram-bot==21.3
+apscheduler==3.10.4
+httpx[http2]==0.27.0
