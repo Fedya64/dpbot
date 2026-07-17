@@ -63,7 +63,7 @@ def main_menu():
 async def init_browser():
     global playwright_instance, browser, browser_context
     try:
-        if browser:  # Якщо старий браузер є — закриваємо
+        if browser:
             await close_browser()
         playwright_instance = await async_playwright().start()
         browser = await playwright_instance.chromium.launch(headless=True)
@@ -93,7 +93,8 @@ async def check_slots(context: ContextTypes.DEFAULT_TYPE):
 
     city = user_city.get(chat_id, "Мюнхен")
     url = CITIES.get(city)
-    if not url:
+    if not url or browser_context is None:
+        await init_browser()
         return
 
     emoji = CITY_EMOJI.get(city, "📍")
@@ -104,10 +105,12 @@ async def check_slots(context: ContextTypes.DEFAULT_TYPE):
             await page.goto(url, wait_until="networkidle", timeout=45000)
             content = (await page.content()).lower()
 
-            # === НАДІЙНА ЛОГІКА ===
-            busy_texts = ["наразі всі місця зайняті", "всі місця зайняті"]
-            page_ok = "електронна черга" in content
-            slots_available = page_ok and not any(text in content for text in busy_texts)
+            # === ФІНАЛЬНА ЛОГІКА НА ОСНОВІ ТВОЇХ СКРІНШОТІВ ===
+            busy_message = "наразі всі місця зайняті" in content
+            has_continue_button = "продовжити" in content
+            has_form = "прізвище" in content and "номер телефону" in content
+
+            slots_available = (has_continue_button or has_form) and not busy_message
 
         finally:
             await page.close()
@@ -117,14 +120,14 @@ async def check_slots(context: ContextTypes.DEFAULT_TYPE):
             "time": datetime.now().strftime("%H:%M:%S"),
             "city": city,
             "available": slots_available,
-            "reason": "busy text found" if not slots_available else "slots available"
+            "reason": "busy message" if busy_message else "form detected"
         })
         if len(debug_checks) > 15:
             debug_checks.pop(0)
 
         key = (chat_id, city)
 
-        # Перший запуск — тільки запам'ятовуємо стан
+        # Перший запуск — тільки запам'ятовуємо
         if key not in last_status:
             last_status[key] = slots_available
             return
@@ -223,7 +226,6 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if old_city:
             last_status.pop((chat_id, old_city), None)
         user_city[chat_id] = text
-        # Скидаємо статус нового міста
         last_status[(chat_id, text)] = None
         await update.message.reply_text(f"✅ Місто змінено на: <b>{text}</b>", parse_mode='HTML', reply_markup=main_menu())
 
