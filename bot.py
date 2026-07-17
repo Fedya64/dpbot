@@ -5,6 +5,8 @@ import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from playwright.async_api import async_playwright
+# Подключаем маскировку под человека
+from playwright_stealth import stealth_async
 
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
@@ -51,22 +53,31 @@ async def check_slots_playwright(city: str):
         async with async_playwright() as p:
             browser = await p.chromium.launch(
                 headless=True,
-                args=["--no-sandbox", "--disable-dev-shm-usage"],
+                args=[
+                    "--no-sandbox", 
+                    "--disable-dev-shm-usage",
+                    "--disable-blink-features=AutomationControlled" # Отключаем флаг автоматизации
+                ],
             )
-            page = await browser.new_page(
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/138.0.0.0 Safari/537.36"
-                )
+            context = await browser.new_context(
+                viewport={"width": 1920, "height": 1080},
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
             )
+            page = await context.new_page()
+            
+            # Активируем режим невидимки
+            await stealth_async(page)
 
-            logger.info("Перевірка сайту для міста: %s", city)
+            logger.info("Перевірка сайту з маскуванням для міста: %s", city)
 
-            await page.goto(url, timeout=30000, wait_until="domcontentloaded")
-            await page.wait_for_timeout(3000)
+            await page.goto(url, timeout=30000, wait_until="networkidle")
+            await page.wait_for_timeout(5000) # Даем время на загрузку контента
             
             text = (await page.inner_text("body")).lower()
+
+            if "blocked" in text or "security reasons" in text:
+                logger.warning("Бот заблокований захистом Cloudflare для міста: %s", city)
+                return None, f"🛡️ {city}: Захист сайту заблокував автоматичний запит."
 
             if "наразі всі місця зайняті" in text:
                 logger.info("Термінів немає: %s", city)
@@ -170,21 +181,24 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 async with async_playwright() as p:
                     browser = await p.chromium.launch(
                         headless=True, 
-                        args=["--no-sandbox", "--disable-dev-shm-usage"]
+                        args=[
+                            "--no-sandbox", 
+                            "--disable-dev-shm-usage",
+                            "--disable-blink-features=AutomationControlled"
+                        ]
                     )
-                    page = await browser.new_page(
-                        user_agent=(
-                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                            "AppleWebKit/537.36 (KHTML, like Gecko) "
-                            "Chrome/138.0.0.0 Safari/537.36"
-                        )
+                    context_page = await browser.new_context(
+                        viewport={"width": 1920, "height": 1080},
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
                     )
-                    await page.goto(CITY_URLS[city], timeout=30000, wait_until="domcontentloaded")
-                    await page.wait_for_timeout(3000)
+                    page = await context_page.new_page()
+                    await stealth_async(page)
+                    
+                    await page.goto(CITY_URLS[city], timeout=30000, wait_until="networkidle")
+                    await page.wait_for_timeout(5000)
                     body_text = await page.inner_text("body")
                     await browser.close()
                     
-                    # Отправляем кусок текста, который получил робот
                     debug_slice = body_text[:600].replace('\n', ' ')
                     await update.message.reply_text(
                         f"📋 Конфіг: {context.chat_data}\n\n"
@@ -254,7 +268,6 @@ def main():
         .build()
     )
 
-    # Стабильная регистрация фоновой задачи
     job_queue = application.job_queue
     job_queue.run_repeating(
         monitor_job,
