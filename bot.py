@@ -1,26 +1,12 @@
-import subprocess
-import sys
-
-# Принудительная установка httpx прямо при запуске скрипта
-try:
-    import httpx
-except ImportError:
-    print("httpx не найден, устанавливаю...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "httpx[http2]==0.27.0"])
-    import httpx
-
-# Дальше идет твой обычный код бота...
-import os
-import logging
-import asyncio
-# ... (весь остальной код, который я давал выше)
 import os
 import sys
 import logging
 import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
-import httpx
+
+# Импортируем curl_cffi вместо httpx
+from curl_cffi import requests
 
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
@@ -62,34 +48,29 @@ async def check_slots_api(city: str):
     if not url:
         return None, f"❌ Немає сайту для {city}"
 
-    # Используем продвинутые заголовки реального Chrome браузера
+    # Заголовки реального браузера Chrome
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
         "Accept-Language": "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
         "Accept-Encoding": "gzip, deflate, br",
         "Cache-Control": "max-age=0",
-        "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
-        "Sec-Ch-Ua-Mobile": "?0",
-        "Sec-Ch-Ua-Platform": '"Windows"',
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Sec-Fetch-User": "?1",
         "Upgrade-Insecure-Requests": "1"
     }
 
     try:
-        # Используем клиент с автоматической поддержкой HTTP/2 (Cloudflare это любит)
-        async with httpx.AsyncClient(http2=True, timeout=15.0, follow_redirects=True) as client:
-            logger.info("Запит до сайту без Playwright для міста: %s", city)
-            response = await client.get(url, headers=headers)
+        # Открываем асинхронную сессию curl_cffi
+        async with requests.AsyncSession() as session:
+            logger.info("Запит через curl_cffi (impersonate='chrome') для міста: %s", city)
+            
+            # impersonate="chrome" заставляет curl_cffi подделывать TLS-отпечаток
+            response = await session.get(url, headers=headers, impersonate="chrome", timeout=15.0)
             
             text = response.text.lower()
 
             if "blocked for security reasons" in text or response.status_code == 403:
-                logger.warning("Бот все ще заблокований Cloudflare (403/Blocked)")
-                return None, f"🛡️ {city}: Сервер хостингу заблокований захистом сайту. Потрібно змінити IP."
+                logger.warning("Бот все ще заблокований захистом (403/Blocked)")
+                return None, f"🛡️ {city}: Сервер хостингу заблокований захистом сайту. Спробуйте інший регіон хостингу."
 
             if "наразі всі місця зайняті" in text:
                 logger.info("Термінів немає: %s", city)
@@ -172,7 +153,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"📍 Поточне місто: {city}")
         case "🔄 Статус":
             city = context.chat_data.get("city", "Мюнхен")
-            await update.message.reply_text("⏳ Перевіряю статус через швидкий HTTP-клієнт...")
+            await update.message.reply_text("⏳ Перевіряю статус через curl_cffi (Chrome Emulation)...")
             _, result = await check_slots_api(city)
             await update.message.reply_text(result)
         case "▶ Увімкнути моніторинг":
@@ -183,11 +164,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⛔ Моніторинг зупинено")
         case "🛠 Debug":
             city = context.chat_data.get("city", "Мюнхен")
-            await update.message.reply_text("🕵️‍♂️ Зчитую сирий HTML сторінки для аналізу...")
+            await update.message.reply_text("🕵️‍♂️ Зчитую сирий HTML сторінки за допомогою curl_cffi...")
             try:
                 headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-                async with httpx.AsyncClient(http2=True, timeout=15.0) as client:
-                    resp = await client.get(CITY_URLS[city], headers=headers)
+                async with requests.AsyncSession() as session:
+                    resp = await session.get(CITY_URLS[city], headers=headers, impersonate="chrome", timeout=15.0)
                     clean_text = resp.text[:600].replace('\n', ' ')
                     await update.message.reply_text(
                         f"📊 Код відповіді: {resp.status_code}\n"
