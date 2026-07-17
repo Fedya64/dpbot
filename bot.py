@@ -158,7 +158,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"📍 Поточне місто: {city}")
         case "🔄 Статус":
             city = context.chat_data.get("city", "Мюнхен")
-            await update.message.reply_text("⏳ Перевіряю сайт, зачекайте кілька секунд...")
+            await update.message.reply_text("⏳ Перевіряю сайт, зачекайте kilka секунд...")
             _, result = await check_slots_playwright(city)
             await update.message.reply_text(result)
         case "▶ Увімкнути моніторинг":
@@ -175,12 +175,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ====================== ОПТИМИЗИРОВАННЫЙ МОНИТОРИНГ ======================
 
-async def monitor_job(context: ContextTypes.DEFAULT_TYPE):
+async def monitor_job(application: Application):
     """
     Проверяет каждый город ровно 1 раз параллельно, 
     после чего рассылает результаты нужным пользователям.
     """
-    application = context.application
     active_cities = set()
 
     # Собираем только те города, которые сейчас реально кто-то мониторит
@@ -241,12 +240,16 @@ def main():
         .build()
     )
 
-    # Используем встроенный в библиотеку JobQueue
+    # Настраиваем планировщик задач встроенного JobQueue
     job_queue = application.job_queue
-    job_queue.run_interval(
+    job_queue.scheduler.add_job(
         monitor_job,
-        interval=60, # Проверка каждую минуту
-        first=10,    # Первый запуск через 10 секунд после старта
+        trigger="interval",
+        seconds=60,         # Проверка каждую минуту
+        args=[application], # Передаем объект приложения в monitor_job
+        id="slots_monitoring_job",
+        max_instances=1,
+        coalesce=True
     )
 
     application.add_handler(CommandHandler("start", start_command))
