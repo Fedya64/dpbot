@@ -158,7 +158,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"📍 Поточне місто: {city}")
         case "🔄 Статус":
             city = context.chat_data.get("city", "Мюнхен")
-            await update.message.reply_text("⏳ Перевіряю сайт, зачекайте kilka секунд...")
+            await update.message.reply_text("⏳ Перевіряю сайт, зачекайте кілька секунд...")
             _, result = await check_slots_playwright(city)
             await update.message.reply_text(result)
         case "▶ Увімкнути моніторинг":
@@ -240,13 +240,13 @@ def main():
         .build()
     )
 
-    # Настраиваем планировщик задач встроенного JobQueue
+    # Настраиваем планировщик задач встроенного JobQueue через подсистему APScheduler
     job_queue = application.job_queue
     job_queue.scheduler.add_job(
         monitor_job,
         trigger="interval",
         seconds=60,         # Проверка каждую минуту
-        args=[application], # Передаем объект приложения в monitor_job
+        args=[application], # Передаем объект приложения напрямую в monitor_job
         id="slots_monitoring_job",
         max_instances=1,
         coalesce=True
