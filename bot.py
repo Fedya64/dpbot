@@ -17,6 +17,8 @@ TOKEN = "8713421271:AAExnQzvDRO1BBRHKTFVnpXjwfJN580xNus"
 TIMEZONE = "Europe/Kyiv"
 TZ = ZoneInfo(TIMEZONE)
 
+CITIES = ["Мюнхен", "Берлін", "Прага", "Варшава"]
+
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
@@ -35,11 +37,10 @@ def get_now():
 def build_keyboard():
     keyboard = [
         ["▶ Увімкнути моніторинг", "⛔ Зупинити моніторинг"],
-        ["🏙 Змінити місто", "🔄 Статус"],
+        ["🏙 Змінити місто", "📍 Поточне місто"],
+        ["🔄 Статус"],
         ["📊 Статистика термінів"],
         ["⏰ Останній термін"],
-        ["📈 Середня тривалість"],
-        ["📅 Найчастіший день"],
         ["🕒 Пікова година"],
         ["🛠 Debug"],
     ]
@@ -47,6 +48,15 @@ def build_keyboard():
         keyboard,
         resize_keyboard=True,
         one_time_keyboard=False
+    )
+
+
+def build_city_keyboard():
+    keyboard = [[city] for city in CITIES]
+    return ReplyKeyboardMarkup(
+        keyboard,
+        resize_keyboard=True,
+        one_time_keyboard=True
     )
 
 
@@ -62,8 +72,9 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     now = get_now()
+    context.user_data["city"] = "Мюнхен"
     await update.message.reply_text(
-        f"📍 Місто: Мюнхен\n"
+        f"📍 Місто: {context.user_data['city']}\n"
         f"🟢 Моніторинг активний\n"
         f"🎁 Безкоштовні сповіщення: необмежено\n\n"
         f"Я повідомлю, коли з’являться вільні слоти.\n"
@@ -81,10 +92,29 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     now = get_now()
 
+    if text == "🏙 Змінити місто":
+        await update.message.reply_text(
+            "Оберіть місто:",
+            reply_markup=build_city_keyboard()
+        )
+        return
+
+    if text in CITIES:
+        context.user_data["city"] = text
+        await update.message.reply_text(
+            f"🏙 Місто змінено на: {text}",
+            reply_markup=build_keyboard()
+        )
+        return
+
     match text:
+        case "📍 Поточне місто":
+            city = context.user_data.get("city", "Мюнхен")
+            await update.message.reply_text(f"📍 Поточне місто: {city}")
         case "🔄 Статус":
+            city = context.user_data.get("city", "Мюнхен")
             await update.message.reply_text(
-                f"🔴 Мюнхен — unknown state\n🕒 {now.strftime('%H:%M:%S')}"
+                f"🔴 {city} — unknown state\n🕒 {now.strftime('%H:%M:%S')}"
             )
         case "▶ Увімкнути моніторинг":
             await update.message.reply_text("✅ Моніторинг активований")
@@ -95,16 +125,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Debug info\n"
                 f"Time: {now.strftime('%Y-%m-%d %H:%M:%S')}"
             )
-        case "🏙 Змінити місто":
-            await update.message.reply_text("Функція зміни міста поки що в розробці.")
         case "📊 Статистика термінів":
             await update.message.reply_text("Статистика поки недоступна.")
         case "⏰ Останній термін":
             await update.message.reply_text("Останній знайдений термін відсутній.")
-        case "📈 Середня тривалість":
-            await update.message.reply_text("Недостатньо даних.")
-        case "📅 Найчастіший день":
-            await update.message.reply_text("Недостатньо даних.")
         case "🕒 Пікова година":
             await update.message.reply_text("Недостатньо даних.")
         case _:
