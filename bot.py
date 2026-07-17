@@ -2,7 +2,7 @@ import os
 import logging
 import sqlite3
 from datetime import datetime
-from bs4 import BeautifulSoup
+from typing import Optional
 from telegram import (
     Update,
     ReplyKeyboardMarkup,
@@ -49,50 +49,54 @@ CHECK_INTERVAL = 60  # одна хвилина
 
 # === БАЗА ДЛЯ СТАТИСТИКИ ===
 def init_db() -> None:
-    conn = sqlite3.connect("slots.db")
-    cur = conn.cursor()
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS slots (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            city TEXT,
-            chat_id INTEGER,
-            opened_at TEXT,
-            closed_at TEXT,
-            duration_min REAL,
-            weekday INTEGER,
-            hour INTEGER
+    with sqlite3.connect("slots.db") as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS slots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                city TEXT,
+                chat_id INTEGER,
+                opened_at TEXT,
+                closed_at TEXT,
+                duration_min REAL,
+                weekday INTEGER,
+                hour INTEGER
+            )
+            """
         )
-        """
-    )
-    conn.commit()
-    conn.close()
+        conn.commit()
 
 # === Playwright глобальные объекты ===
 playwright = None
 browser = None
-context = None
+browser_context = None
 
 async def init_browser():
-    global playwright, browser, context
+    global playwright, browser, browser_context
     playwright = await async_playwright().start()
     browser = await playwright.chromium.launch(headless=True, args=["--no-sandbox"])
-    context = await browser.new_context()
+    browser_context = await browser.new_context()
 
 async def close_browser():
-    global playwright, browser, context
-    if context:
-        await context.close()
+    global playwright, browser, browser_context
+    if browser_context:
+        await browser_context.close()
     if browser:
         await browser.close()
     if playwright:
         await playwright.stop()
 
-async def fetch_page(url: str) -> tuple[str, int]:
-    global context
-    page = await context.new_page()
+async def fetch_page(url: str) -> tuple[str, Optional[int]]:
+    global browser_context
+    page = await browser_context.new_page()
     try:
-        response = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        try:
+            response = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        except Exception as e:
+            logging.warning(f"Ошибка загрузки {url}: {e}")
+            return "", None
+
         status = response.status if response else None
         if status != 200:
             logging.warning(f"HTTP {status} для {url}")
@@ -107,14 +111,10 @@ async def fetch_page(url: str) -> tuple[str, int]:
         logging.info(f"Title: {title}")
 
         html = await page.content()
-
         low_html = html.lower()
-        if "cloudflare" in low_html:
-            logging.warning("Cloudflare обнаружена")
-        if "attention required" in low_html:
-            logging.warning("Страница Cloudflare")
-        if "forbidden" in low_html:
-            logging.warning("Forbidden")
+
+        if "cloudflare" in low_html or "attention required" in low_html or status in (403, 503):
+            logging.warning("Cloudflare/Forbidden detected")
 
         return html, status
     finally:
@@ -151,9 +151,7 @@ async def check_slots(context: ContextTypes.DEFAULT_TYPE) -> None:
             logging.warning(f"[{chat_id}] {city}: статус {status}, слоты считаем недоступными")
             slots_available = False
         else:
-            soup = BeautifulSoup(html, "html.parser")
-            page_text = soup.get_text(separator=" ").strip()
-            slots_available = "Наразі всі місця зайняті" not in page_text
+            slots_available = "наразі всі місця зайняті" not in html.lower()
 
         debug_checks.append({
             "time": datetime.now().strftime("%H:%M:%S"),
@@ -168,17 +166,16 @@ async def check_slots(context: ContextTypes.DEFAULT_TYPE) -> None:
         if slots_available and not last_status.get(key, False):
             last_status[key] = True
             now = datetime.now()
-            conn = sqlite3.connect("slots.db")
-            cur = conn.cursor()
-            cur.execute(
-                """
-                INSERT INTO slots (city, chat_id, opened_at, weekday, hour)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (city, chat_id, now.isoformat(), now.weekday(), now.hour),
-            )
-            conn.commit()
-            conn.close()
+            with sqlite3.connect("slots.db") as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    INSERT INTO slots (city, chat_id, opened_at, weekday, hour)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (city, chat_id, now.isoformat(), now.weekday(), now.hour),
+                )
+                conn.commit()
 
             msg = (
                 f"{emoji} {city.upper()} — З'ЯВИЛИСЬ ВІЛЬНІ ТЕРМІНИ!\n"
@@ -192,58 +189,79 @@ async def check_slots(context: ContextTypes.DEFAULT_TYPE) -> None:
 
         elif not slots_available and last_status.get(key, False):
             last_status[key] = False
-            conn = sqlite3.connect("slots.db")
-            cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT id, opened_at FROM slots
-                WHERE city = ? AND chat_id = ? AND closed_at IS NULL
-                ORDER BY id DESC LIMIT 1
-                """,
-                (city, chat_id),
-            )
-            row = cur.fetchone()
-            if row:
-                slot_id, opened_at = row
-                opened_dt = datetime.fromisoformat(opened_at)
-                closed_dt = datetime.now()
-                duration = (closed_dt - opened_dt).total_seconds() / 60.0
+            with sqlite3.connect("slots.db") as conn:
+                cur = conn.cursor()
                 cur.execute(
                     """
-                    UPDATE slots
-                    SET closed_at = ?, duration_min = ?
-                    WHERE id = ?
+                    SELECT id, opened_at FROM slots
+                    WHERE city = ? AND chat_id = ? AND closed_at IS NULL
+                    ORDER BY id DESC LIMIT 1
                     """,
-                    (closed_dt.isoformat(), duration, slot_id),
+                    (city, chat_id),
                 )
-                conn.commit()
-            conn.close()
+                row = cur.fetchone()
+                if row:
+                    slot_id, opened_at = row
+                    opened_dt = datetime.fromisoformat(opened_at)
+                    closed_dt = datetime.now()
+                    duration = (closed_dt - opened_dt).total_seconds() / 60.0
+                    cur.execute(
+                        """
+                        UPDATE slots
+                        SET closed_at = ?, duration_min = ?
+                        WHERE id = ?
+                        """,
+                        (closed_dt.isoformat(), duration, slot_id),
+                    )
+                    conn.commit()
 
     except Exception as e:
         logging.error(f"Помилка перевірки слотів для {chat_id}/{city}: {e}")
 
-# === MAIN ===
-async def main():
-    TOKEN = os.getenv("TOKEN")
-    if not TOKEN:
-        raise RuntimeError("Не задано TOKEN в змінних оточення.")
+# === КОМАНДЫ ===
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    user_city[chat_id] = "Мюнхен"
+    active_monitoring[chat_id] = True
 
-    init_db()
-    await init_browser()
+    jobs = context.job_queue.get_jobs_by_name(str(chat_id))
+    for job in jobs:
+        job.schedule_removal()
 
-    application = ApplicationBuilder().token(TOKEN).build()
+    context.job_queue.run_repeating(
+        check_slots,
+        interval=CHECK_INTERVAL,
+        first=5,
+        chat_id=chat_id,
+        name=str(chat_id)
+    )
 
-    async def _startup(app):
-        await app.bot.delete_webhook(drop_pending_updates=True)
-        logging.info("Scheduler started")
-        logging.info("Application started")
+    await update.message.reply_text(
+        "Вітаю! Моніторинг запущено.",
+        reply_markup=main_menu()
+    )
 
-    application.post_init = _startup
+async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    active_monitoring[chat_id] = False
 
-    try:
-        await application.run_polling()
-    finally:
-        await close_browser()
+    jobs = context.job_queue.get_jobs_by_name(str(chat_id))
+    for job in jobs:
+        job.schedule_removal()
 
-if __name__ == "__main__":
-    asyncio.run(main())
+    last_status.pop((chat_id, user_city.get(chat_id, "Мюнхен")), None)
+
+    await update.message.reply_text("Моніторинг зупинено.")
+
+async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    chat_id = update.effective_chat.id
+
+    if text == "🔄 Статус":
+        await update.message.reply_text(
+            "Моніторинг активний." if active_monitoring.get(chat_id) else "Моніторинг вимкнено."
+        )
+    elif text == "🏙 Змінити місто":
+        await update.message.reply_text(
+            "Оберіть місто:",
+            reply_markup=ReplyKeyboardMarkup([list(CITIES.keys())
