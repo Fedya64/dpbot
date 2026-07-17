@@ -1,5 +1,4 @@
 import logging
-import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -16,7 +15,6 @@ from telegram.ext import (
 # ====================== НАСТРОЙКИ ======================
 TOKEN = "8713421271:AAExnQzvDRO1BBRHKTFVnpXjwfJN580xNus"
 
-# Таймзона (поменяй при необходимости)
 TIMEZONE = "Europe/Kiev"   # Europe/Kiev, Europe/Warsaw, Europe/Berlin
 
 logging.basicConfig(
@@ -27,7 +25,6 @@ logger = logging.getLogger(__name__)
 
 
 def get_now():
-    """Текущее время в правильной зоне"""
     return datetime.now(ZoneInfo(TIMEZONE))
 
 
@@ -81,7 +78,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ====================== ЗАПУСК ======================
-async def main():
+if __name__ == "__main__":
     application = Application.builder().token(TOKEN).build()
 
     application.add_handler(CommandHandler("start", start_command))
@@ -89,8 +86,6 @@ async def main():
     application.add_handler(CallbackQueryHandler(button_handler))
 
     logger.info(f"Бот запущен | Таймзона: {TIMEZONE}")
-    await application.run_polling(drop_pending_updates=True)
 
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    # Исправленный запуск для Railway и подобных платформ
+    application.run_polling(drop_pending_updates=True)
