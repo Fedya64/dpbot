@@ -1,6 +1,5 @@
 FROM python:3.12-slim
 
-# Устанавливаем tzdata и системные зависимости для Chromium
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tzdata \
     wget curl unzip \
