@@ -2,102 +2,168 @@ import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
-    CallbackQueryHandler,
     ContextTypes,
     filters,
 )
 
 # ====================== НАСТРОЙКИ ======================
+
 TOKEN = "8713421271:AAExnQzvDRO1BBRHKTFVnpXjwfJN580xNus"
 
-# Таймзона
-TIMEZONE = "Europe/Kyiv"   # Kyiv, а не Kiev
+TIMEZONE = "Europe/Kyiv"
+TZ = ZoneInfo(TIMEZONE)
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
+    level=logging.INFO,
 )
+
 logger = logging.getLogger(__name__)
 
 
+# ====================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ======================
+
 def get_now():
-    try:
-        return datetime.now(ZoneInfo(TIMEZONE))
-    except Exception:
-        return datetime.utcnow()
+    """Текущее время по Киеву."""
+    return datetime.now(TZ)
 
 
-# ====================== ХЕНДЛЕРЫ ======================
-
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message:
-        await show_main_menu(update, context)
-
-
-async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message and update.message.text:
-        text = update.message.text.strip().lower()
-        if text in ["меню", "/menu", "start"]:
-            await show_main_menu(update, context)
-        else:
-            now = get_now()
-            await update.message.reply_text(f"🕒 {now.strftime('%H:%M')}\nНапиши 'меню'")
-
+# ====================== МЕНЮ ======================
 
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("🔄 Статус", callback_data="status")],
-        [InlineKeyboardButton("🏙 Змінити місто", callback_data="change_city")],
-        [InlineKeyboardButton("📊 Статистика термінів", callback_data="stats")],
-        [InlineKeyboardButton("⏰ Останній термін", callback_data="last_term")],
-        [InlineKeyboardButton("📈 Середня тривалість", callback_data="avg_duration")],
-        [InlineKeyboardButton("📅 Найчастіший день", callback_data="popular_day")],
-        [InlineKeyboardButton("🕒 Пікова година", callback_data="peak_hour")],
-        [InlineKeyboardButton("🛠 Debug", callback_data="debug")],
-        [InlineKeyboardButton("⛔ Зупинити моніторинг", callback_data="stop_monitoring")],
-        [InlineKeyboardButton("▶ Увімкнути моніторинг", callback_data="start_monitoring")],
+        ["🔄 Статус", "🏙 Змінити місто"],
+        ["📊 Статистика термінів", "⏰ Останній термін"],
+        ["📈 Середня тривалість", "📅 Найчастіший день"],
+        ["🕒 Пікова година", "🛠 Debug"],
+        ["⛔ Зупинити моніторинг", "▶ Увімкнути моніторинг"],
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    reply_markup = ReplyKeyboardMarkup(
+        keyboard,
+        resize_keyboard=True
+    )
 
     now = get_now()
+
     await update.message.reply_text(
-        f"Монітор вільних термінів\n🕒 {now.strftime('%H:%M')}",
-        reply_markup=reply_markup
+        f"Монітор вільних термінів\n"
+        f"🕒 {now.strftime('%H:%M')}",
+        reply_markup=reply_markup,
     )
 
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+# ====================== КОМАНДЫ ======================
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await show_main_menu(update, context)
+
+
+# ====================== ОБРАБОТКА ТЕКСТА ======================
+
+async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    text = update.message.text.strip()
+    text_lower = text.lower()
+
+    if text_lower in ("меню", "/menu", "start"):
+        await show_main_menu(update, context)
+        return
+
     now = get_now()
 
-    if query.data == "status":
-        await query.message.reply_text(f"🔴 Мюнхен — unknown state\n🕒 {now.strftime('%H:%M:%S')}")
-    elif query.data == "start_monitoring":
-        await query.message.reply_text("✅ Моніторинг активований")
-    elif query.data == "stop_monitoring":
-        await query.message.reply_text("⛔ Моніторинг зупинено")
-    elif query.data == "debug":
-        await query.message.reply_text(f"Debug info\nTime: {now.strftime('%Y-%m-%d %H:%M:%S')}")
-    else:
-        await query.message.reply_text(f"Функція в розробці\n🕒 {now.strftime('%H:%M')}")
+    match text:
+
+        case "🔄 Статус":
+            await update.message.reply_text(
+                f"🔴 Мюнхен — unknown state\n"
+                f"🕒 {now.strftime('%H:%M:%S')}"
+            )
+
+        case "▶ Увімкнути моніторинг":
+            await update.message.reply_text(
+                "✅ Моніторинг активований"
+            )
+
+        case "⛔ Зупинити моніторинг":
+            await update.message.reply_text(
+                "⛔ Моніторинг зупинено"
+            )
+
+        case "🛠 Debug":
+            await update.message.reply_text(
+                "Debug info\n"
+                f"Time: {now.strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+
+        case "🏙 Змінити місто":
+            await update.message.reply_text(
+                "Функція зміни міста поки що в розробці."
+            )
+
+        case "📊 Статистика термінів":
+            await update.message.reply_text(
+                "Статистика поки недоступна."
+            )
+
+        case "⏰ Останній термін":
+            await update.message.reply_text(
+                "Останній знайдений термін відсутній."
+            )
+
+        case "📈 Середня тривалість":
+            await update.message.reply_text(
+                "Недостатньо даних."
+            )
+
+        case "📅 Найчастіший день":
+            await update.message.reply_text(
+                "Недостатньо даних."
+            )
+
+        case "🕒 Пікова година":
+            await update.message.reply_text(
+                "Недостатньо даних."
+            )
+
+        case _:
+            await update.message.reply_text(
+                f"Невідома команда.\n"
+                f"Напишіть «меню» або натисніть кнопку.\n"
+                f"🕒 {now.strftime('%H:%M')}"
+            )
 
 
 # ====================== ЗАПУСК ======================
+
 def main():
+
     application = Application.builder().token(TOKEN).build()
 
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu_handler))
-    application.add_handler(CallbackQueryHandler(button_handler))
+    application.add_handler(
+        CommandHandler("start", start_command)
+    )
 
-    logger.info(f"Бот запущен | Таймзона: {TIMEZONE}")
-    application.run_polling(drop_pending_updates=True)
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            text_handler,
+        )
+    )
+
+    logger.info(
+        "Бот запущен | Таймзона: %s",
+        TIMEZONE,
+    )
+
+    application.run_polling(
+        drop_pending_updates=True
+    )
 
 
 if __name__ == "__main__":
