@@ -1,1 +1,2 @@
-web: python bot.py
+release: playwright install chromium
+web: python main.py
