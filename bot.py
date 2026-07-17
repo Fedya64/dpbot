@@ -40,27 +40,46 @@ def get_now():
 async def check_slots_playwright(city: str):
     url = CITY_URLS.get(city)
     if not url:
-        return f"❌ Немає сайту для {city}"
+        return None, f"❌ Немає сайту для {city}"
 
+    browser = None
     try:
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
-            await page.goto(url, timeout=30000)
-            content = await page.content()
-            await browser.close()
+            browser = await p.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-dev-shm-usage"],
+            )
+            page = await browser.new_page(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/138.0.0.0 Safari/537.36"
+                )
+            )
 
-            text = content.lower()
-            # ❌ Нет терминов
+            logger.info("Перевірка %s", city)
+
+            await page.goto(url, timeout=30000, wait_until="networkidle")
+            text = (await page.inner_text("body")).lower()
+
             if "наразі всі місця зайняті" in text:
-                return f"❌ {city}: термінів немає"
-            # ✅ Есть термины
+                logger.info("Термінів немає: %s", city)
+                return False, f"❌ {city}: термінів немає"
+
             elif "продовжити" in text:
-                return f"✅ {city}: є вільні терміни!"
-            else:
-                return f"⚠️ {city}: сайт доступний, але ключові слова не знайдено"
+                logger.info("Знайдено вільні терміни: %s", city)
+                return True, f"✅ {city}: є вільні терміни!"
+
+            logger.info("Ключові слова не знайдено: %s", city)
+            return None, f"⚠️ {city}: сайт доступний, але ключові слова не знайдено"
+
     except Exception as e:
-        return f"❌ Помилка при перевірці: {e}"
+        logger.exception("Помилка при перевірці %s", city)
+        return None, f"❌ Помилка при перевірці: {e}"
+
+    finally:
+        if browser:
+            await browser.close()
 
 
 # ====================== МЕНЮ ======================
@@ -92,10 +111,11 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     now = get_now()
-    context.user_data["city"] = "Мюнхен"
-    context.user_data["monitoring"] = True
+    context.chat_data["city"] = "Мюнхен"
+    context.chat_data["monitoring"] = True
+    context.chat_data["last_state"] = False
     await update.message.reply_text(
-        f"📍 Місто: {context.user_data['city']}\n"
+        f"📍 Місто: {context.chat_data['city']}\n"
         f"🟢 Моніторинг активний\n"
         f"Я повідомлю, коли з’являться вільні слоти.\n"
         f"🕒 {now.strftime('%H:%M')}"
@@ -116,26 +136,26 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if text in CITY_URLS.keys():
-        context.user_data["city"] = text
+        context.chat_data["city"] = text
         await update.message.reply_text(f"🏙 Місто змінено на: {text}", reply_markup=build_keyboard())
         return
 
     match text:
         case "📍 Поточне місто":
-            city = context.user_data.get("city", "Мюнхен")
+            city = context.chat_data.get("city", "Мюнхен")
             await update.message.reply_text(f"📍 Поточне місто: {city}")
         case "🔄 Статус":
-            city = context.user_data.get("city", "Мюнхен")
-            result = await check_slots_playwright(city)
+            city = context.chat_data.get("city", "Мюнхен")
+            _, result = await check_slots_playwright(city)
             await update.message.reply_text(result)
         case "▶ Увімкнути моніторинг":
-            context.user_data["monitoring"] = True
+            context.chat_data["monitoring"] = True
             await update.message.reply_text("✅ Моніторинг активований")
         case "⛔ Зупинити моніторинг":
-            context.user_data["monitoring"] = False
+            context.chat_data["monitoring"] = False
             await update.message.reply_text("⛔ Моніторинг зупинено")
         case "🛠 Debug":
-            await update.message.reply_text("Debug info: user_data=" + str(context.user_data))
+            await update.message.reply_text("Debug info: chat_data=" + str(context.chat_data))
         case _:
             await update.message.reply_text("Невідома команда. Натисніть кнопку.")
 
@@ -146,17 +166,24 @@ async def monitor_job(application: Application):
     for chat_id, data in application.chat_data.items():
         if data.get("monitoring", False):
             city = data.get("city", "Мюнхен")
-            result = await check_slots_playwright(city)
-            if "✅" in result:
+            state, result = await check_slots_playwright(city)
+            if state and not data.get("last_state", False):
                 await application.bot.send_message(chat_id=chat_id, text=result)
+            data["last_state"] = state
 
 
 def main():
     application = Application.builder().token(TOKEN).build()
 
-    # планировщик: проверка раз в минуту
     scheduler = AsyncIOScheduler(timezone=TIMEZONE)
-    scheduler.add_job(lambda: monitor_job(application), "interval", minutes=1)
+    scheduler.add_job(
+        monitor_job,
+        trigger="interval",
+        minutes=1,
+        args=[application],
+        max_instances=1,
+        coalesce=True,
+    )
     scheduler.start()
 
     application.add_handler(CommandHandler("start", start_command))
